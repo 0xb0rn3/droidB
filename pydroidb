@@ -764,16 +764,26 @@ class ADBAutomationTool:
             }
 
             for key, desc in menu_options.items():
-                 print(f"{Colors.YELLOW}{key}{Colors.ENDC}. {desc}")
+                    print(f"{Colors.YELLOW}{key}{Colors.ENDC}. {desc}")
 
             choice = input("\nSelect option: ").strip()
+
+            # Helper function for state check to avoid repetition
+            def check_device_state():
+                if not self.device_info or self.device_info.state != 'device':
+                    print(f"\n{Colors.RED}This action requires the device to be in normal 'device' mode.{Colors.ENDC}")
+                    if self.device_info:
+                        print(f"{Colors.YELLOW}Current state is '{self.device_info.state}'. Please reboot to the main system.{Colors.ENDC}")
+                    time.sleep(3)
+                    return False
+                return True
 
             if choice == '1':
                 if self.device_info: self.display_device_info()
             elif choice == '2':
-                if self.device_info and self.device_info.state == 'device': self.file_operations_menu()
+                if check_device_state(): self.file_operations_menu()
             elif choice == '3':
-                if self.device_info and self.device_info.state == 'device': self.system_operations_menu()
+                if check_device_state(): self.system_operations_menu()
             elif choice == '4':
                 self.fastboot_menu()
             elif choice == '5':
