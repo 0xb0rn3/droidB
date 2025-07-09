@@ -15,7 +15,7 @@ import sys
 import time
 import platform
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from dataclasses import dataclass
 
 # --- UI and Color Definitions ---
@@ -37,31 +37,43 @@ class Colors:
 
 def display_banner():
     """Displays the tool's startup banner and information."""
-    banner = f"""
-{Colors.BOLD}{Colors.BLUE}
-██████╗ ██╗   ██╗██████╗  ██████╗ ██╗ ██████╗ ██████╗         
-██╔══██╗╚██╗ ██╔╝██╔══██╗██╔═══██╗██║██╔═══██╗██╔══██╗             
-██████╔╝ ╚████╔╝ ██████╔╝██║   ██║██║██║   ██║██████╔╝
-██╔═══╝   ╚██╔╝  ██╔══██╗██║   ██║██║██║   ██║██╔══██╗   
-██║        ██║   ██████╔╝╚██████╔╝██║╚██████╔╝██████╔╝
-╚═╝        ╚═╝   ╚═════╝  ╚═════╝ ╚═╝ ╚═════╝ ╚═════╝
+    pydroid_ascii = [
+        "██████╗ ██╗   ██╗██████╗  ██████╗ ██╗ ██████╗ ██████╗         ",
+        "██╔══██╗╚██╗ ██╔╝██╔══██╗██╔═══██╗██║██╔═══██╗██╔══██╗             ",
+        "██████╔╝ ╚████╔╝ ██████╔╝██║   ██║██║██║   ██║██████╔╝",
+        "██╔═══╝   ╚██╔╝  ██╔══██╗██║   ██║██║██║   ██║██╔══██╗   ",
+        "██║        ██║   ██████╔╝╚██████╔╝██║╚██████╔╝██████╔╝",
+        "╚═╝        ╚═╝   ╚═════╝  ╚═════╝ ╚═╝ ╚═════╝ ╚═════╝"
+    ]
 
-⠀⠀⠀⠀⢀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠙⢷⣤⣤⣴⣶⣶⣦⣤⣤⡾⠋⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⣼⣿⣿⣉⣹⣿⣿⣿⣿⣏⣉⣿⣿⣧⠀⠀⠀⠀
-⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀
-⣠⣄⠀⢠⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⠀⣠⣄
-⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿
-⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿
-⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿
-⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿
-⠻⠟⠁⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠈⠻⠟
-⠀⠀⠀⠀⠉⠉⣿⣿⣿⡏⠉⠉⢹⣿⣿⣿⠉⠉⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠈⠉⠉⠀⠀⠀⠀⠉⠉⠁⠀⠀⠀⠀⠀⠀
-{Colors.ENDC}
+    android_ascii = [
+        "⠀⠀⠀⠀⢀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⠙⢷⣤⣤⣴⣶⣶⣦⣤⣤⡾⠋⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⣼⣿⣿⣉⣹⣿⣿⣿⣿⣏⣉⣿⣿⣧⠀⠀⠀⠀",
+        "⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀",
+        "⣠⣄⠀⢠⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⠀⣠⣄",
+        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
+        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
+        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
+        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
+        "⠻⠟⠁⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠈⠻⠟",
+        "⠀⠀⠀⠀⠉⠉⣿⣿⣿⡏⠉⠉⢹⣿⣿⣿⠉⠉⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀",
+        "⠀⠀⠀⠀⠀⠀⠈⠉⠉⠀⠀⠀⠀⠉⠉⠁⠀⠀⠀⠀⠀⠀"
+    ]
+
+    # Combine the ASCII arts side by side
+    max_len = max(len(pydroid_ascii), len(android_ascii))
+    pydroid_ascii += [' ' * len(pydroid_ascii[0])] * (max_len - len(pydroid_ascii))
+    android_ascii += [' ' * len(android_ascii[0])] * (max_len - len(android_ascii))
+
+    combined_banner = "\n".join([f"{Colors.BOLD}{Colors.BLUE}{p_line}  {a_line}{Colors.ENDC}" for p_line, a_line in zip(pydroid_ascii, android_ascii)])
+    
+    banner = f"""
+{combined_banner}
+
 {Colors.BOLD}A comprehensive ADB automation tool for Android device management{Colors.ENDC}
 {Colors.YELLOW}Made with ❤️ by 0xbv1 | 0xb0rn3 IG: theehiv3 Contact: 0xb0rn3@proton.me {Colors.ENDC}
     """
@@ -109,19 +121,10 @@ class ADBAutomationTool:
     def _find_executable(self, name: str) -> str:
         """
         Locate an executable in system PATH or common SDK locations.
-        
-        Args:
-            name: The name of the executable (e.g., 'adb', 'fastboot').
-            
-        Returns:
-            The full path to the executable.
-            
-        Raises:
-            FileNotFoundError: If the executable cannot be found.
         """
         # 1. Check if it's in the system PATH
         try:
-            result = subprocess.run(['which' if platform.system() != 'Windows' else 'where', name], capture_output=True, text=True)
+            result = subprocess.run(['which' if platform.system() != 'Windows' else 'where', name], capture_output=True, text=True, check=False)
             if result.returncode == 0:
                 return result.stdout.strip().split('\n')[0]
         except FileNotFoundError:
@@ -134,12 +137,13 @@ class ADBAutomationTool:
             home / 'Library/Android/sdk/platform-tools',  # macOS
             Path('/usr/local/bin'),
             Path('/usr/bin'),
+            Path('/opt/android-sdk/platform-tools'),  # Arch Linux Path
             home / 'AppData/Local/Android/sdk/platform-tools' # Windows
         ]
         
         for path in common_paths:
             executable_path = path / (name + ('.exe' if platform.system() == 'Windows' else ''))
-            if executable_path.exists():
+            if executable_path.is_file():
                 return str(executable_path)
         
         raise FileNotFoundError(
@@ -172,7 +176,6 @@ class ADBAutomationTool:
     def get_device_info(self) -> Optional[DeviceInfo]:
         """
         Retrieve comprehensive information for a selected device.
-        Handles device selection if multiple devices are connected.
         """
         success, stdout, _ = self.run_command([self.adb_path, 'devices'])
         if not success:
@@ -313,12 +316,10 @@ class ADBAutomationTool:
         local_dir = input("Enter local destination directory: ").strip()
         Path(local_dir).mkdir(exist_ok=True)
         
-        # This is a simplified pull. A full recursive pull is more complex.
-        # We'll pull the files listed by 'ls -p' that are not directories.
         success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'ls', '-p', remote_dir])
         if success:
             for filename in stdout.split():
-                if not filename.endswith('/'): # ls -p appends / to directories
+                if not filename.endswith('/'): 
                     remote_file_path = f"{remote_dir.rstrip('/')}/{filename}"
                     self._execute_file_transfer('pull', remote_file_path, local_dir)
             print(f"\n{Colors.GREEN}Batch pull complete.{Colors.ENDC}")
@@ -338,7 +339,7 @@ class ADBAutomationTool:
     def install_apk(self):
         """Install an APK file onto the device."""
         apk_path = input("Enter APK file path: ").strip()
-        if not Path(apk_path).exists() or not apk_path.lower().endswith('.apk'):
+        if not Path(apk_path).is_file() or not apk_path.lower().endswith('.apk'):
             print(f"{Colors.RED}Invalid APK file path.{Colors.ENDC}")
             return
             
@@ -408,19 +409,21 @@ class ADBAutomationTool:
             '2': ('Erase Partition', self.fastboot_erase),
             '3': ('Unlock Bootloader (Erases Data)', self.fastboot_unlock),
             '4': ('Lock Bootloader', self.fastboot_lock),
-            '5': ('Reboot from Fastboot', self.fastboot_reboot),
-            '6': ('Check Fastboot Devices', self.fastboot_devices),
-            '7': ('Back to Main Menu', None)
+            '5': ('Set Active Slot (A/B Devices)', self.fastboot_set_active_slot),
+            '6': ('Get All Device Variables (getvar all)', self.fastboot_getvar_all),
+            '7': ('Reboot from Fastboot', self.fastboot_reboot),
+            '8': ('Check Fastboot Devices', self.fastboot_devices),
+            '9': ('Back to Main Menu', None)
         }
         self._run_menu("🔥 FASTBOOT OPERATIONS", menu_options)
 
     def fastboot_flash(self):
         """Flash a partition with an image file, with extensive safety checks."""
-        partition = input("Enter partition name (e.g., boot, recovery, system): ").strip().lower()
+        partition = input("Enter partition name (e.g., boot, recovery): ").strip().lower()
         if not partition: return
         
         image_path = input("Enter image file path: ").strip()
-        if not Path(image_path).exists():
+        if not Path(image_path).is_file():
             print(f"{Colors.RED}Image file does not exist.{Colors.ENDC}")
             return
             
@@ -452,7 +455,7 @@ class ADBAutomationTool:
         print(f"\n{Colors.BOLD}{Colors.RED}{'⚠️'*20}\nCRITICAL WARNING: PARTITION ERASE\n{'⚠️'*20}{Colors.ENDC}")
         print(f"You are about to PERMANENTLY ERASE the '{partition}' partition. This is IRREVERSIBLE.")
 
-        if partition in self.critical_partitions and partition != 'userdata' and partition != 'cache':
+        if partition in self.critical_partitions and partition not in ['userdata', 'cache']:
             print(f"{Colors.YELLOW}Erasing the critical partition '{partition}' will likely brick your device.{Colors.ENDC}")
 
         if not self.confirm_action(f"Are you sure you want to erase '{partition}'?"):
@@ -472,7 +475,6 @@ class ADBAutomationTool:
         if not self.confirm_action("Do you want to proceed with unlocking?"):
             return
         
-        # NOTE: The command can vary. 'flashing unlock' is standard, but some OEMs use 'oem unlock'.
         command = [self.fastboot_path, 'flashing', 'unlock']
         success, stdout, stderr = self.run_command(command)
         output = stdout + stderr
@@ -495,6 +497,41 @@ class ADBAutomationTool:
             print(f"{Colors.GREEN}Lock command sent. Please check your device screen.{Colors.ENDC}\n{output}")
         else:
             print(f"{Colors.RED}Lock command failed.{Colors.ENDC}\n{output}")
+
+    def fastboot_set_active_slot(self):
+        """Set the active boot slot on A/B devices."""
+        slot = input("Enter slot to set as active ('a' or 'b'): ").strip().lower()
+        if slot not in ['a', 'b']:
+            print(f"{Colors.RED}Invalid slot. Please enter 'a' or 'b'.{Colors.ENDC}")
+            return
+        
+        if not self.confirm_action(f"Are you sure you want to set the active slot to '{slot}'?"):
+            return
+
+        command = [self.fastboot_path, f'--set-active={slot}']
+        success, stdout, stderr = self.run_command(command)
+        output = stdout + stderr
+        if success:
+            print(f"{Colors.GREEN}Successfully set active slot to '{slot}'.\n{output}{Colors.ENDC}")
+        else:
+            print(f"{Colors.RED}Failed to set active slot.\n{output}{Colors.ENDC}")
+
+    def fastboot_getvar_all(self):
+        """Get all bootloader variables from the device."""
+        print(f"{Colors.YELLOW}Fetching all bootloader variables...{Colors.ENDC}")
+        command = [self.fastboot_path, 'getvar', 'all']
+        success, stdout, stderr = self.run_command(command, timeout=120)
+        
+        # 'getvar all' command weirdly prints its output to stderr.
+        output = stderr if not stdout else stdout + "\n" + stderr
+        
+        if success or output:
+            print(f"\n{Colors.GREEN}Device Variables:{Colors.ENDC}")
+            print("-" * 60)
+            print(output)
+            print("-" * 60)
+        else:
+            print(f"{Colors.RED}Failed to get device variables.{Colors.ENDC}")
 
     def fastboot_reboot(self):
         """Reboot the device from Fastboot mode."""
@@ -537,13 +574,17 @@ class ADBAutomationTool:
             '5': ('Screen Recording', self.screen_recording),
             '6': ('View Device Logs (Logcat)', self.logcat),
             '7': ('Interactive Shell Access', self.shell_access),
-            '8': ('Back to Main Menu', None)
+            '8': ('Get Battery Info', self.get_battery_info),
+            '9': ('Get Device IP Address', self.get_device_ip),
+            '10': ('Toggle Wi-Fi', self.toggle_wifi),
+            '11': ('Back to Main Menu', None)
         }
         self._run_menu("⚙️ SYSTEM OPERATIONS", menu_options)
 
     def reboot_device(self, mode: str = ''):
         """Reboot the device, with optional mode (recovery, bootloader)."""
-        if not self.confirm_action(f"Are you sure you want to reboot to '{mode or 'system'}'?"):
+        action = mode or 'system'
+        if not self.confirm_action(f"Are you sure you want to reboot to '{action}'?"):
             return
         command = [self.adb_path, '-s', self.device_info.serial, 'reboot', mode]
         success, _, _ = self.run_command(command)
@@ -557,11 +598,12 @@ class ADBAutomationTool:
         timestamp = int(time.time())
         filename = f"screenshot_{timestamp}.png"
         device_path = f"/sdcard/{filename}"
+        local_dest = Path.cwd()
         
         success, _, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'screencap', device_path])
         if success:
-            self._execute_file_transfer('pull', device_path, '.')
-            # Clean up the file from the device
+            print(f"{Colors.YELLOW}Screenshot taken. Pulling to {local_dest}...{Colors.ENDC}")
+            self._execute_file_transfer('pull', device_path, str(local_dest))
             self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', device_path])
         else:
             print(f"{Colors.RED}Failed to take screenshot on device.{Colors.ENDC}")
@@ -569,9 +611,9 @@ class ADBAutomationTool:
     def screen_recording(self):
         """Record the device screen."""
         try:
-            duration = int(input("Enter recording duration in seconds (1-180, default 30): ").strip() or "30")
-            if not 1 <= duration <= 180:
-                raise ValueError
+            duration_str = input("Enter recording duration in seconds (1-180, default 30): ").strip()
+            duration = int(duration_str) if duration_str else 30
+            if not 1 <= duration <= 180: raise ValueError
         except ValueError:
             print(f"{Colors.RED}Invalid duration. Please enter a number between 1 and 180.{Colors.ENDC}")
             return
@@ -579,6 +621,7 @@ class ADBAutomationTool:
         timestamp = int(time.time())
         filename = f"screenrecord_{timestamp}.mp4"
         device_path = f"/sdcard/{filename}"
+        local_dest = Path.cwd()
         
         print(f"{Colors.YELLOW}Starting {duration}s screen recording... Press Ctrl+C to stop early.{Colors.ENDC}")
         
@@ -588,25 +631,30 @@ class ADBAutomationTool:
         ]
 
         try:
-            self.run_command(record_command, timeout=duration + 10)
+            # This is a blocking call, it will wait for the recording to finish or timeout.
+            self.run_command(record_command, timeout=duration + 15)
         except KeyboardInterrupt:
             print(f"\n{Colors.YELLOW}Recording stopped by user.{Colors.ENDC}")
+            # The recording process on the device needs to be killed manually on Ctrl+C.
+            self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'killall', 'screenrecord'])
         finally:
-            print(f"{Colors.YELLOW}Pulling video file...{Colors.ENDC}")
-            self._execute_file_transfer('pull', device_path, '.')
+            print(f"{Colors.YELLOW}Pulling video file to {local_dest}...{Colors.ENDC}")
+            self._execute_file_transfer('pull', device_path, str(local_dest))
             self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', device_path])
 
     def logcat(self):
         """View device logs in real-time."""
         print(f"\n{Colors.YELLOW}Starting real-time log monitoring... Press Ctrl+C to stop.{Colors.ENDC}")
+        logcat_process = None
         try:
-            process = subprocess.Popen([self.adb_path, '-s', self.device_info.serial, 'logcat'])
-            process.wait()
+            command = [self.adb_path, '-s', self.device_info.serial, 'logcat']
+            logcat_process = subprocess.Popen(command)
+            logcat_process.wait()
         except KeyboardInterrupt:
             print(f"\n{Colors.GREEN}Logcat stopped.{Colors.ENDC}")
         finally:
-            if 'process' in locals() and process.poll() is None:
-                process.terminate()
+            if logcat_process and logcat_process.poll() is None:
+                logcat_process.terminate()
 
     def shell_access(self):
         """Provide an interactive shell to the device."""
@@ -616,9 +664,52 @@ class ADBAutomationTool:
         print("-" * 50)
         print(f"{Colors.GREEN}Shell session ended.{Colors.ENDC}")
 
+    def get_battery_info(self):
+        """Displays detailed battery information."""
+        success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'dumpsys', 'battery'])
+        if success:
+            print(f"\n{Colors.GREEN}Battery Information:{Colors.ENDC}")
+            print("-" * 60)
+            print(stdout)
+            print("-" * 60)
+        else:
+            print(f"{Colors.RED}Failed to get battery information.{Colors.ENDC}")
+
+    def get_device_ip(self):
+        """Gets and displays the device's Wi-Fi IP address."""
+        success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'ip', 'addr', 'show', 'wlan0'])
+        if success and 'inet' in stdout:
+            ip_line = [line for line in stdout.split('\n') if 'inet ' in line][0]
+            ip_address = ip_line.strip().split()[1].split('/')[0]
+            print(f"\n{Colors.GREEN}Device Wi-Fi IP Address: {Colors.BOLD}{ip_address}{Colors.ENDC}")
+        else:
+            print(f"{Colors.RED}Could not determine Wi-Fi IP address. Is the device connected to Wi-Fi?{Colors.ENDC}")
+
+    def toggle_wifi(self):
+        """Enables or disables Wi-Fi on the device."""
+        choice = input("Do you want to [1] Enable or [2] Disable Wi-Fi? Enter 1 or 2: ").strip()
+        if choice == '1':
+            command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'svc', 'wifi', 'enable']
+            action = "Enabling"
+            final_state = "enabled"
+        elif choice == '2':
+            command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'svc', 'wifi', 'disable']
+            action = "Disabling"
+            final_state = "disabled"
+        else:
+            print(f"{Colors.RED}Invalid choice.{Colors.ENDC}")
+            return
+        
+        print(f"{Colors.YELLOW}{action} Wi-Fi...{Colors.ENDC}")
+        success, _, _ = self.run_command(command)
+        if success:
+            print(f"{Colors.GREEN}Wi-Fi has been {final_state}.{Colors.ENDC}")
+        else:
+            print(f"{Colors.RED}Failed to change Wi-Fi state.{Colors.ENDC}")
+
     # --- Main Menu Logic ---
     
-    def _run_menu(self, title: str, options: dict):
+    def _run_menu(self, title: str, options: Dict[str, Tuple[str, callable]]):
         """Generic function to display and handle a menu."""
         while True:
             clear_screen()
@@ -637,7 +728,7 @@ class ADBAutomationTool:
                 clear_screen()
                 print(f"{Colors.HEADER}--- {desc} ---{Colors.ENDC}")
                 func()
-                input(f"\n{Colors.YELLOW}Press Enter to return to the menu...{Colors.ENDC}")
+                input(f"\n\n{Colors.YELLOW}Press Enter to return to the menu...{Colors.ENDC}")
             else:
                 print(f"{Colors.RED}Invalid choice. Please try again.{Colors.ENDC}")
                 time.sleep(1)
@@ -658,7 +749,7 @@ class ADBAutomationTool:
                 state_color = Colors.GREEN if self.device_info.state == 'device' else Colors.RED
                 print(f"Connected Device: {Colors.BOLD}{self.device_info.model}{Colors.ENDC} ({state_color}{self.device_info.state}{Colors.ENDC})")
             else:
-                print(f"\n{Colors.BOLD}{Colors.RED}⚠️ No device connected.{Colors.ENDC}")
+                print(f"\n{Colors.BOLD}{Colors.RED}⚠️ No device connected or authorized.{Colors.ENDC}")
                 print(f"{Colors.YELLOW}Please connect an Android device with USB debugging enabled.{Colors.ENDC}")
             
             print("="*60)
