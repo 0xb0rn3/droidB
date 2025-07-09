@@ -1,0 +1,1618 @@
+#!/usr/bin/env python3
+"""
+IMPORTANT SAFETY WARNINGS:
+- This tool deals with device firmware and system partitions
+- Incorrect usage can result in device boot loops or permanent damage
+- Always ensure you have proper recovery images before flashing
+- Test commands on non-critical devices first
+"""
+
+import subprocess
+import os
+import sys
+import time
+import json
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+
+@dataclass
+class DeviceInfo:
+    """Stores comprehensive device information for safety checks"""
+    serial: str
+    model: str
+    android_version: str
+    sdk_version: str
+    bootloader_version: str
+    state: str  # device, recovery, fastboot, unauthorized, etc.
+
+class ADBAutomationTool:
+    """
+    Comprehensive ADB automation tool with safety features
+    
+    This class provides a safe, user-friendly interface to ADB and Fastboot
+    commands with built-in safety checks and error handling.
+    """
+    
+    def __init__(self):
+        self.device_info: Optional[DeviceInfo] = None
+        self.adb_path = self._find_adb_path()
+        self.fastboot_path = self._find_fastboot_path()
+        self.safety_mode = True  # Always start in safety mode
+        
+        # Define critical partitions that require extra confirmation
+        self.critical_partitions = {
+            'boot', 'system', 'recovery', 'bootloader', 'radio',
+            'vendor', 'userdata', 'cache', 'misc', 'persist'
+        }
+        
+        # Common file extensions for different image types
+        self.image_extensions = {
+            '.img': 'Standard Android image',
+            '.bin': 'Binary firmware',
+            '.tar': 'Tar archive (Samsung)',
+            '.zip': 'Flashable zip',
+            '.mbn': 'Qualcomm firmware'
+        }
+    
+    def _find_adb_path(self) -> str:
+        """
+        Locate ADB executable in system PATH or common locations
+        
+        Returns:
+            str: Path to ADB executable
+            
+        Raises:
+            FileNotFoundError: If ADB cannot be found
+        """
+        # Check if adb is in PATH
+        try:
+            result = subprocess.run(['which', 'adb'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except FileNotFoundError:
+            pass
+        
+        # Common ADB locations
+        common_paths = [
+            '/usr/bin/adb',
+            '/usr/local/bin/adb',
+            '~/Android/Sdk/platform-tools/adb',
+            '~/Library/Android/sdk/platform-tools/adb'
+        ]
+        
+        for path in common_paths:
+            expanded_path = os.path.expanduser(path)
+            if os.path.exists(expanded_path):
+                return expanded_path
+        
+        raise FileNotFoundError("ADB not found. Please install Android SDK platform-tools.")
+    
+    def _find_fastboot_path(self) -> str:
+        """
+        Locate Fastboot executable in system PATH or common locations
+        
+        Returns:
+            str: Path to Fastboot executable
+            
+        Raises:
+            FileNotFoundError: If Fastboot cannot be found
+        """
+        # Check if fastboot is in PATH
+        try:
+            result = subprocess.run(['which', 'fastboot'], capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except FileNotFoundError:
+            pass
+        
+        # Common Fastboot locations (usually same as ADB)
+        common_paths = [
+            '/usr/bin/fastboot',
+            '/usr/local/bin/fastboot',
+            '~/Android/Sdk/platform-tools/fastboot',
+            '~/Library/Android/sdk/platform-tools/fastboot'
+        ]
+        
+        for path in common_paths:
+            expanded_path = os.path.expanduser(path)
+            if os.path.exists(expanded_path):
+                return expanded_path
+        
+        raise FileNotFoundError("Fastboot not found. Please install Android SDK platform-tools.")
+    
+    def run_command(self, command: List[str], timeout: int = 30) -> Tuple[bool, str, str]:
+        """
+        Execute a command with proper error handling and timeout
+        
+        Args:
+            command: List of command arguments
+            timeout: Command timeout in seconds
+            
+        Returns:
+            Tuple of (success, stdout, stderr)
+        """
+        try:
+            print(f"Executing: {' '.join(command)}")
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
+            success = result.returncode == 0
+            return success, result.stdout, result.stderr
+            
+        except subprocess.TimeoutExpired:
+            return False, "", f"Command timed out after {timeout} seconds"
+        except Exception as e:
+            return False, "", f"Command failed: {str(e)}"
+    
+    def get_device_info(self) -> Optional[DeviceInfo]:
+        """
+        Retrieve comprehensive device information for safety checks
+        
+        Returns:
+            DeviceInfo object or None if device not found
+        """
+        # Check if device is connected
+        success, stdout, stderr = self.run_command([self.adb_path, 'devices'])
+        if not success:
+            print(f"Failed to take screenshot: {stderr}")
+            return
+        
+        # Pull screenshot to computer
+        command = [self.adb_path, '-s', self.device_info.serial, 'pull', '/sdcard/screenshot.png', filename]
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Screenshot saved as {filename}")
+            # Clean up device
+            self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', '/sdcard/screenshot.png'])
+        else:
+            print(f"Failed to pull screenshot: {stderr}")
+    
+    def screen_recording(self):
+        """Record device screen"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        duration = input("Enter recording duration in seconds (default 30): ").strip()
+        if not duration:
+            duration = "30"
+        
+        try:
+            duration_int = int(duration)
+            if duration_int <= 0 or duration_int > 180:
+                print("Duration must be between 1 and 180 seconds")
+                return
+        except ValueError:
+            print("Invalid duration")
+            return
+        
+        timestamp = int(time.time())
+        filename = f"screenrecord_{timestamp}.mp4"
+        
+        print(f"Recording screen for {duration} seconds...")
+        print("Press Ctrl+C to stop recording early")
+        
+        # Record screen on device
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'screenrecord', 
+                  '--time-limit', duration, '/sdcard/screenrecord.mp4']
+        
+        try:
+            success, stdout, stderr = self.run_command(command, timeout=duration_int + 10)
+            
+            if success:
+                # Pull recording to computer
+                command = [self.adb_path, '-s', self.device_info.serial, 'pull', '/sdcard/screenrecord.mp4', filename]
+                success, stdout, stderr = self.run_command(command)
+                
+                if success:
+                    print(f"Screen recording saved as {filename}")
+                    # Clean up device
+                    self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', '/sdcard/screenrecord.mp4'])
+                else:
+                    print(f"Failed to pull recording: {stderr}")
+            else:
+                print(f"Recording failed: {stderr}")
+                
+        except KeyboardInterrupt:
+            print("\nRecording stopped by user")
+            # Try to pull partial recording
+            command = [self.adb_path, '-s', self.device_info.serial, 'pull', '/sdcard/screenrecord.mp4', filename]
+            success, stdout, stderr = self.run_command(command)
+            if success:
+                print(f"Partial recording saved as {filename}")
+    
+    def logcat(self):
+        """View device logs"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        print("\nLogcat options:")
+        print("1. View recent logs")
+        print("2. Clear log buffer")
+        print("3. Filter by tag")
+        print("4. Save logs to file")
+        print("5. Real-time monitoring")
+        
+        choice = input("Select option: ").strip()
+        
+        if choice == '1':
+            command = [self.adb_path, '-s', self.device_info.serial, 'logcat', '-d']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print("\nRecent logs:")
+                print("-" * 60)
+                # Show last 50 lines
+                lines = stdout.strip().split('\n')
+                for line in lines[-50:]:
+                    print(line)
+            else:
+                print(f"Failed to get logs: {stderr}")
+        
+        elif choice == '2':
+            command = [self.adb_path, '-s', self.device_info.serial, 'logcat', '-c']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print("Log buffer cleared")
+            else:
+                print(f"Failed to clear logs: {stderr}")
+        
+        elif choice == '3':
+            tag = input("Enter tag to filter: ").strip()
+            command = [self.adb_path, '-s', self.device_info.serial, 'logcat', '-s', tag]
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print(f"\nLogs for tag '{tag}':")
+                print("-" * 60)
+                print(stdout)
+            else:
+                print(f"Failed to get filtered logs: {stderr}")
+        
+        elif choice == '4':
+            filename = f"logcat_{int(time.time())}.txt"
+            command = [self.adb_path, '-s', self.device_info.serial, 'logcat', '-d']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                with open(filename, 'w') as f:
+                    f.write(stdout)
+                print(f"Logs saved to {filename}")
+            else:
+                print(f"Failed to save logs: {stderr}")
+        
+        elif choice == '5':
+            print("Real-time log monitoring (Press Ctrl+C to stop)")
+            try:
+                process = subprocess.Popen(
+                    [self.adb_path, '-s', self.device_info.serial, 'logcat'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                while True:
+                    line = process.stdout.readline()
+                    if line:
+                        print(line.strip())
+                    
+            except KeyboardInterrupt:
+                print("\nLog monitoring stopped")
+                process.terminate()
+        
+        else:
+            print("Invalid choice")
+    
+    def shell_access(self):
+        """Interactive shell access"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        print("\nShell access options:")
+        print("1. Single command")
+        print("2. Interactive shell")
+        
+        choice = input("Select option: ").strip()
+        
+        if choice == '1':
+            command = input("Enter shell command: ").strip()
+            
+            # Execute shell command
+            adb_command = [self.adb_path, '-s', self.device_info.serial, 'shell', command]
+            success, stdout, stderr = self.run_command(adb_command)
+            
+            if success:
+                print("Command output:")
+                print("-" * 40)
+                print(stdout)
+            else:
+                print(f"Command failed: {stderr}")
+        
+        elif choice == '2':
+            print("Starting interactive shell (type 'exit' to quit)")
+            print("-" * 50)
+            
+            try:
+                # Start interactive shell
+                subprocess.run([self.adb_path, '-s', self.device_info.serial, 'shell'])
+            except KeyboardInterrupt:
+                print("\nShell session ended")
+        
+        else:
+            print("Invalid choice")
+    
+    def backup_restore_menu(self):
+        """Backup and restore operations"""
+        while True:
+            print("\n" + "="*40)
+            print("BACKUP & RESTORE")
+            print("="*40)
+            print("1. Create full backup")
+            print("2. Create app data backup")
+            print("3. Restore from backup")
+            print("4. List backup contents")
+            print("5. Back to main menu")
+            
+            choice = input("Select operation: ").strip()
+            
+            if choice == '1':
+                self.create_full_backup()
+            elif choice == '2':
+                self.create_app_backup()
+            elif choice == '3':
+                self.restore_backup()
+            elif choice == '4':
+                self.list_backup_contents()
+            elif choice == '5':
+                break
+            else:
+                print("Invalid choice")
+    
+    def create_full_backup(self):
+        """Create full device backup"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        print("\n⚠️  BACKUP NOTICE")
+        print("This will create a full backup of your device.")
+        print("Process may take 30+ minutes depending on data size.")
+        print("Ensure device stays connected and screen stays on.")
+        
+        if not self.confirm_action("Create full backup?"):
+            return
+        
+        timestamp = int(time.time())
+        backup_file = f"backup_full_{timestamp}.ab"
+        
+        print(f"Creating backup: {backup_file}")
+        print("You may need to confirm backup on device screen...")
+        
+        # Create backup command
+        command = [self.adb_path, '-s', self.device_info.serial, 'backup', '-all', '-f', backup_file]
+        success, stdout, stderr = self.run_command(command, timeout=3600)  # 1 hour timeout
+        
+        if success:
+            if os.path.exists(backup_file):
+                file_size = os.path.getsize(backup_file)
+                print(f"Backup created successfully: {backup_file}")
+                print(f"Size: {file_size / 1024 / 1024:.2f} MB")
+            else:
+                print("Backup command completed but file not found")
+        else:
+            print(f"Backup failed: {stderr}")
+    
+    def create_app_backup(self):
+        """Create backup of specific app"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        package_name = input("Enter package name to backup: ").strip()
+        
+        timestamp = int(time.time())
+        backup_file = f"backup_{package_name}_{timestamp}.ab"
+        
+        print(f"Creating app backup: {backup_file}")
+        print("You may need to confirm backup on device screen...")
+        
+        # Create app backup command
+        command = [self.adb_path, '-s', self.device_info.serial, 'backup', '-f', backup_file, package_name]
+        success, stdout, stderr = self.run_command(command, timeout=1800)  # 30 minute timeout
+        
+        if success:
+            if os.path.exists(backup_file):
+                file_size = os.path.getsize(backup_file)
+                print(f"App backup created: {backup_file}")
+                print(f"Size: {file_size / 1024 / 1024:.2f} MB")
+            else:
+                print("Backup command completed but file not found")
+        else:
+            print(f"App backup failed: {stderr}")
+    
+    def restore_backup(self):
+        """Restore from backup file"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        backup_file = input("Enter backup file path: ").strip()
+        
+        if not os.path.exists(backup_file):
+            print("Backup file does not exist")
+            return
+        
+        print("\n⚠️  RESTORE WARNING")
+        print("This will restore data to your device.")
+        print("Existing data may be overwritten.")
+        print("You may need to confirm restore on device screen.")
+        
+        if not self.confirm_action("Restore from backup?"):
+            return
+        
+        # Restore backup command
+        command = [self.adb_path, '-s', self.device_info.serial, 'restore', backup_file]
+        success, stdout, stderr = self.run_command(command, timeout=3600)  # 1 hour timeout
+        
+        if success:
+            print("Restore completed successfully")
+            print(stdout)
+        else:
+            print(f"Restore failed: {stderr}")
+    
+    def list_backup_contents(self):
+        """List contents of backup file (requires additional tools)"""
+        backup_file = input("Enter backup file path: ").strip()
+        
+        if not os.path.exists(backup_file):
+            print("Backup file does not exist")
+            return
+        
+        print(f"\nBackup file: {backup_file}")
+        file_size = os.path.getsize(backup_file)
+        print(f"Size: {file_size / 1024 / 1024:.2f} MB")
+        
+        # Basic file information
+        print("\nNote: To view detailed backup contents, you need additional tools like:")
+        print("- Android Backup Extractor (ABE)")
+        print("- dd command to extract tar archive")
+        print("- This tool shows basic file information only")
+    
+    def advanced_menu(self):
+        """Advanced operations menu"""
+        while True:
+            print("\n" + "="*40)
+            print("ADVANCED OPERATIONS")
+            print("="*40)
+            print("1. Enable/Disable USB debugging")
+            print("2. Port forwarding")
+            print("3. Reverse port forwarding")
+            print("4. TCP/IP connection")
+            print("5. Kill ADB server")
+            print("6. Start ADB server")
+            print("7. Get device architecture")
+            print("8. Memory information")
+            print("9. CPU information")
+            print("10. Back to main menu")
+            
+            choice = input("Select operation: ").strip()
+            
+            if choice == '1':
+                self.toggle_usb_debugging()
+            elif choice == '2':
+                self.port_forwarding()
+            elif choice == '3':
+                self.reverse_port_forwarding()
+            elif choice == '4':
+                self.tcp_connection()
+            elif choice == '5':
+                self.kill_adb_server()
+            elif choice == '6':
+                self.start_adb_server()
+            elif choice == '7':
+                self.get_device_architecture()
+            elif choice == '8':
+                self.memory_information()
+            elif choice == '9':
+                self.cpu_information()
+            elif choice == '10':
+                break
+            else:
+                print("Invalid choice")
+    
+    def toggle_usb_debugging(self):
+        """Enable or disable USB debugging"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        print("\nUSB Debugging operations:")
+        print("1. Check current status")
+        print("2. Enable USB debugging")
+        print("3. Disable USB debugging")
+        
+        choice = input("Select operation: ").strip()
+        
+        if choice == '1':
+            # Check if debugging is enabled
+            command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.debuggable']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                status = stdout.strip()
+                print(f"USB Debugging status: {'Enabled' if status == '1' else 'Disabled'}")
+            else:
+                print(f"Failed to check status: {stderr}")
+        
+        elif choice == '2':
+            print("USB debugging is typically enabled from Developer Options in device settings")
+            print("This cannot be enabled remotely via ADB for security reasons")
+        
+        elif choice == '3':
+            print("USB debugging is typically disabled from Developer Options in device settings")
+            print("This cannot be disabled remotely via ADB for security reasons")
+        
+        else:
+            print("Invalid choice")
+    
+    def port_forwarding(self):
+        """Set up port forwarding"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        local_port = input("Enter local port: ").strip()
+        remote_port = input("Enter remote port: ").strip()
+        
+        try:
+            int(local_port)
+            int(remote_port)
+        except ValueError:
+            print("Ports must be numbers")
+            return
+        
+        # Set up port forwarding
+        command = [self.adb_path, '-s', self.device_info.serial, 'forward', f'tcp:{local_port}', f'tcp:{remote_port}']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Port forwarding set up: localhost:{local_port} -> device:{remote_port}")
+            
+            # Show current forwards
+            command = [self.adb_path, '-s', self.device_info.serial, 'forward', '--list']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print("\nCurrent port forwards:")
+                print(stdout)
+        else:
+            print(f"Port forwarding failed: {stderr}")
+    
+    def reverse_port_forwarding(self):
+        """Set up reverse port forwarding"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        remote_port = input("Enter remote (device) port: ").strip()
+        local_port = input("Enter local port: ").strip()
+        
+        try:
+            int(local_port)
+            int(remote_port)
+        except ValueError:
+            print("Ports must be numbers")
+            return
+        
+        # Set up reverse port forwarding
+        command = [self.adb_path, '-s', self.device_info.serial, 'reverse', f'tcp:{remote_port}', f'tcp:{local_port}']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Reverse port forwarding set up: device:{remote_port} -> localhost:{local_port}")
+            
+            # Show current reverse forwards
+            command = [self.adb_path, '-s', self.device_info.serial, 'reverse', '--list']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print("\nCurrent reverse forwards:")
+                print(stdout)
+        else:
+            print(f"Reverse port forwarding failed: {stderr}")
+    
+    def tcp_connection(self):
+        """Set up TCP/IP connection"""
+        print("\nTCP/IP Connection setup:")
+        print("1. Enable TCP/IP mode")
+        print("2. Connect to device over TCP/IP")
+        print("3. Disconnect TCP/IP")
+        
+        choice = input("Select operation: ").strip()
+        
+        if choice == '1':
+            if not self.device_info:
+                print("Please connect a device via USB first")
+                return
+            
+            port = input("Enter port (default 5555): ").strip()
+            if not port:
+                port = "5555"
+            
+            # Enable TCP/IP mode
+            command = [self.adb_path, '-s', self.device_info.serial, 'tcpip', port]
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print(f"TCP/IP mode enabled on port {port}")
+                print("Device will restart ADB in TCP/IP mode")
+                print("Get device IP address and use 'Connect to device' option")
+            else:
+                print(f"Failed to enable TCP/IP mode: {stderr}")
+        
+        elif choice == '2':
+            ip_address = input("Enter device IP address: ").strip()
+            port = input("Enter port (default 5555): ").strip()
+            if not port:
+                port = "5555"
+            
+            # Connect to device
+            command = [self.adb_path, 'connect', f'{ip_address}:{port}']
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print(f"Connected to {ip_address}:{port}")
+                print(stdout)
+            else:
+                print(f"Connection failed: {stderr}")
+        
+        elif choice == '3':
+            if not self.device_info:
+                print("Please connect a device first")
+                return
+            
+            # Disconnect TCP/IP
+            command = [self.adb_path, 'disconnect', self.device_info.serial]
+            success, stdout, stderr = self.run_command(command)
+            
+            if success:
+                print("TCP/IP connection disconnected")
+                print(stdout)
+            else:
+                print(f"Disconnect failed: {stderr}")
+        
+        else:
+            print("Invalid choice")
+    
+    def kill_adb_server(self):
+        """Kill ADB server"""
+        command = [self.adb_path, 'kill-server']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("ADB server killed")
+            self.device_info = None  # Clear device info
+        else:
+            print(f"Failed to kill ADB server: {stderr}")
+    
+    def start_adb_server(self):
+        """Start ADB server"""
+        command = [self.adb_path, 'start-server']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("ADB server started")
+        else:
+            print(f"Failed to start ADB server: {stderr}")
+    
+    def get_device_architecture(self):
+        """Get device architecture information"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        arch_commands = {
+            'CPU Architecture': [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.product.cpu.abi'],
+            'CPU Architecture 2': [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.product.cpu.abi2'],
+            'Supported ABIs': [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.product.cpu.abilist'],
+            'Hardware': [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.hardware'],
+            'Board': [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop', 'ro.board.platform']
+        }
+        
+        print("\nDevice Architecture Information:")
+        print("-" * 50)
+        
+        for label, command in arch_commands.items():
+            success, stdout, stderr = self.run_command(command)
+            value = stdout.strip() if success else "Unknown"
+            print(f"{label:<20}: {value}")
+    
+    def memory_information(self):
+        """Get device memory information"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        # Get memory info
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'cat', '/proc/meminfo']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("\nMemory Information:")
+            print("-" * 50)
+            
+            # Parse and display key memory information
+            memory_info = {}
+            for line in stdout.strip().split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    memory_info[key.strip()] = value.strip()
+            
+            # Display important memory stats
+            important_keys = ['MemTotal', 'MemFree', 'MemAvailable', 'Buffers', 'Cached', 'SwapTotal', 'SwapFree']
+            
+            for key in important_keys:
+                if key in memory_info:
+                    print(f"{key:<15}: {memory_info[key]}")
+        else:
+            print(f"Failed to get memory information: {stderr}")
+    
+    def cpu_information(self):
+        """Get device CPU information"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        # Get CPU info
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'cat', '/proc/cpuinfo']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("\nCPU Information:")
+            print("-" * 50)
+            
+            # Parse and display CPU information
+            cpu_info = {}
+            processor_count = 0
+            
+            for line in stdout.strip().split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    if key == 'processor':
+                        processor_count += 1
+                    elif key not in cpu_info:  # Store first occurrence
+                        cpu_info[key] = value
+            
+            # Display important CPU stats
+            important_keys = ['model name', 'cpu family', 'cpu MHz', 'cache size', 'bogomips']
+            
+            print(f"Processor count: {processor_count}")
+            
+            for key in important_keys:
+                if key in cpu_info:
+                    print(f"{key:<15}: {cpu_info[key]}")
+        else:
+            print(f"Failed to get CPU information: {stderr}")
+    
+    def confirm_action(self, message: str) -> bool:
+        """
+        Get user confirmation for potentially dangerous actions
+        
+        Args:
+            message: Confirmation message to display
+            
+        Returns:
+            bool: True if user confirms, False otherwise
+        """
+        while True:
+            response = input(f"{message} (y/N): ").strip().lower()
+            if response in ['y', 'yes']:
+                return True
+            elif response in ['n', 'no', '']:
+                return False
+            else:
+                print("Please enter 'y' or 'n'")
+    
+    def main_menu(self):
+        """
+        Main application menu
+        
+        This is the primary interface that provides access to all tool functions
+        organized by category for easy navigation.
+        """
+        print("\n" + "="*60)
+        print("ADB AUTOMATION TOOL")
+        print("="*60)
+        print("A comprehensive tool for Android device management")
+        print("⚠️  WARNING: Use with caution - can damage device if misused")
+        print("="*60)
+        
+        while True:
+            # Get and display current device info
+            current_device = self.get_device_info()
+            
+            if current_device:
+                self.display_device_info()
+            else:
+                print("\n⚠️  No device connected")
+                print("Please connect an Android device with USB debugging enabled")
+                print("="*60)
+            
+            print("\nMAIN MENU")
+            print("-" * 30)
+            print("1. Device Information")
+            print("2. File Operations")
+            print("3. System Operations")
+            print("4. Fastboot Operations")
+            print("5. Backup & Restore")
+            print("6. Advanced Operations")
+            print("7. Refresh device list")
+            print("8. Exit")
+            
+            choice = input("\nSelect option: ").strip()
+            
+            if choice == '1':
+                if current_device:
+                    self.display_device_info()
+                    self.list_connected_devices()
+                else:
+                    print("No device connected")
+            
+            elif choice == '2':
+                if current_device:
+                    self.file_operations_menu()
+                else:
+                    print("Please connect a device first")
+            
+            elif choice == '3':
+                if current_device:
+                    self.system_operations_menu()
+                else:
+                    print("Please connect a device first")
+            
+            elif choice == '4':
+                self.fastboot_menu()
+            
+            elif choice == '5':
+                if current_device:
+                    self.backup_restore_menu()
+                else:
+                    print("Please connect a device first")
+            
+            elif choice == '6':
+                if current_device:
+                    self.advanced_menu()
+                else:
+                    print("Please connect a device first")
+            
+            elif choice == '7':
+                print("Refreshing device list...")
+                self.device_info = None
+            
+            elif choice == '8':
+                print("Goodbye!")
+                break
+            
+            else:
+                print("Invalid choice. Please try again.")
+
+def main():
+    """
+    Main application entry point
+    
+    This function initializes the tool and handles any startup errors
+    like missing ADB/Fastboot executables.
+    """
+    try:
+        tool = ADBAutomationTool()
+        tool.main_menu()
+    
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("\nPlease install Android SDK Platform Tools:")
+        print("1. Download from: https://developer.android.com/studio/releases/platform-tools")
+        print("2. Extract to a directory")
+        print("3. Add the directory to your system PATH")
+        print("4. Or install via package manager (e.g., apt install android-tools-adb)")
+    
+    except KeyboardInterrupt:
+        print("\n\nTool interrupted by user. Goodbye!")
+    
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        print("Please report this issue with the error details.")
+
+if __name__ == "__main__":
+    main()
+            print(f"Error checking devices: {stderr}")
+            return None
+        
+        # Parse device list
+        lines = stdout.strip().split('\n')[1:]  # Skip header
+        connected_devices = []
+        
+        for line in lines:
+            if line.strip():
+                parts = line.split('\t')
+                if len(parts) >= 2:
+                    connected_devices.append((parts[0], parts[1]))
+        
+        if not connected_devices:
+            print("No devices connected")
+            return None
+        
+        if len(connected_devices) > 1:
+            print("Multiple devices connected:")
+            for i, (serial, state) in enumerate(connected_devices):
+                print(f"{i + 1}. {serial} ({state})")
+            
+            while True:
+                try:
+                    choice = int(input("Select device (number): ")) - 1
+                    if 0 <= choice < len(connected_devices):
+                        selected_serial = connected_devices[choice][0]
+                        break
+                    else:
+                        print("Invalid selection")
+                except ValueError:
+                    print("Please enter a number")
+        else:
+            selected_serial = connected_devices[0][0]
+        
+        # Get detailed device information
+        device_commands = {
+            'model': [self.adb_path, '-s', selected_serial, 'shell', 'getprop', 'ro.product.model'],
+            'android_version': [self.adb_path, '-s', selected_serial, 'shell', 'getprop', 'ro.build.version.release'],
+            'sdk_version': [self.adb_path, '-s', selected_serial, 'shell', 'getprop', 'ro.build.version.sdk'],
+            'bootloader': [self.adb_path, '-s', selected_serial, 'shell', 'getprop', 'ro.bootloader']
+        }
+        
+        device_data = {'serial': selected_serial}
+        
+        for key, command in device_commands.items():
+            success, stdout, stderr = self.run_command(command)
+            device_data[key] = stdout.strip() if success else "Unknown"
+        
+        # Get device state
+        for serial, state in connected_devices:
+            if serial == selected_serial:
+                device_data['state'] = state
+                break
+        
+        self.device_info = DeviceInfo(
+            serial=device_data['serial'],
+            model=device_data['model'],
+            android_version=device_data['android_version'],
+            sdk_version=device_data['sdk_version'],
+            bootloader_version=device_data['bootloader'],
+            state=device_data['state']
+        )
+        
+        return self.device_info
+    
+    def display_device_info(self):
+        """Display current device information in a formatted way"""
+        if not self.device_info:
+            print("No device information available. Please connect a device first.")
+            return
+        
+        print("\n" + "="*50)
+        print("CONNECTED DEVICE INFORMATION")
+        print("="*50)
+        print(f"Serial:           {self.device_info.serial}")
+        print(f"Model:            {self.device_info.model}")
+        print(f"Android Version:  {self.device_info.android_version}")
+        print(f"SDK Version:      {self.device_info.sdk_version}")
+        print(f"Bootloader:       {self.device_info.bootloader_version}")
+        print(f"State:            {self.device_info.state}")
+        print("="*50 + "\n")
+    
+    def list_connected_devices(self):
+        """List all connected devices with their states"""
+        success, stdout, stderr = self.run_command([self.adb_path, 'devices', '-l'])
+        
+        if not success:
+            print(f"Error listing devices: {stderr}")
+            return
+        
+        print("\n" + "="*60)
+        print("CONNECTED DEVICES")
+        print("="*60)
+        
+        lines = stdout.strip().split('\n')
+        if len(lines) <= 1:
+            print("No devices connected")
+        else:
+            for line in lines[1:]:  # Skip header
+                if line.strip():
+                    print(line)
+        
+        print("="*60 + "\n")
+    
+    def file_operations_menu(self):
+        """
+        Handle file operations between device and computer
+        
+        This menu provides safe file transfer operations with path validation
+        and progress indicators for large files.
+        """
+        while True:
+            print("\n" + "="*40)
+            print("FILE OPERATIONS")
+            print("="*40)
+            print("1. Push file to device")
+            print("2. Pull file from device")
+            print("3. List device directory")
+            print("4. Install APK")
+            print("5. Uninstall package")
+            print("6. List installed packages")
+            print("7. Back to main menu")
+            
+            choice = input("Select operation: ").strip()
+            
+            if choice == '1':
+                self.push_file()
+            elif choice == '2':
+                self.pull_file()
+            elif choice == '3':
+                self.list_device_directory()
+            elif choice == '4':
+                self.install_apk()
+            elif choice == '5':
+                self.uninstall_package()
+            elif choice == '6':
+                self.list_packages()
+            elif choice == '7':
+                break
+            else:
+                print("Invalid choice")
+    
+    def push_file(self):
+        """Push file from computer to device with safety checks"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        local_path = input("Enter local file path: ").strip()
+        if not os.path.exists(local_path):
+            print("Local file does not exist")
+            return
+        
+        remote_path = input("Enter device destination path: ").strip()
+        
+        # Warn about system directories
+        system_dirs = ['/system', '/vendor', '/boot', '/recovery']
+        if any(remote_path.startswith(d) for d in system_dirs):
+            print("WARNING: You're pushing to a system directory!")
+            print("This may require root access and could damage your device.")
+            
+            if not self.confirm_action("Continue with push to system directory?"):
+                return
+        
+        # Execute push command
+        command = [self.adb_path, '-s', self.device_info.serial, 'push', local_path, remote_path]
+        success, stdout, stderr = self.run_command(command, timeout=120)
+        
+        if success:
+            print(f"Successfully pushed {local_path} to {remote_path}")
+            print(stdout)
+        else:
+            print(f"Push failed: {stderr}")
+    
+    def pull_file(self):
+        """Pull file from device to computer"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        remote_path = input("Enter device file path: ").strip()
+        local_path = input("Enter local destination path: ").strip()
+        
+        # Create local directory if it doesn't exist
+        local_dir = os.path.dirname(local_path)
+        if local_dir and not os.path.exists(local_dir):
+            os.makedirs(local_dir)
+        
+        # Execute pull command
+        command = [self.adb_path, '-s', self.device_info.serial, 'pull', remote_path, local_path]
+        success, stdout, stderr = self.run_command(command, timeout=120)
+        
+        if success:
+            print(f"Successfully pulled {remote_path} to {local_path}")
+            print(stdout)
+        else:
+            print(f"Pull failed: {stderr}")
+    
+    def list_device_directory(self):
+        """List contents of device directory"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        directory = input("Enter device directory path (or press Enter for /): ").strip()
+        if not directory:
+            directory = "/"
+        
+        # Execute ls command
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'ls', '-la', directory]
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"\nContents of {directory}:")
+            print("-" * 60)
+            print(stdout)
+        else:
+            print(f"Failed to list directory: {stderr}")
+    
+    def install_apk(self):
+        """Install APK file to device"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        apk_path = input("Enter APK file path: ").strip()
+        if not os.path.exists(apk_path):
+            print("APK file does not exist")
+            return
+        
+        if not apk_path.lower().endswith('.apk'):
+            print("File does not appear to be an APK")
+            return
+        
+        # Execute install command
+        command = [self.adb_path, '-s', self.device_info.serial, 'install', apk_path]
+        success, stdout, stderr = self.run_command(command, timeout=120)
+        
+        if success:
+            print(f"Successfully installed {apk_path}")
+            print(stdout)
+        else:
+            print(f"Installation failed: {stderr}")
+    
+    def uninstall_package(self):
+        """Uninstall package from device"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        package_name = input("Enter package name (e.g., com.example.app): ").strip()
+        
+        # Execute uninstall command
+        command = [self.adb_path, '-s', self.device_info.serial, 'uninstall', package_name]
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Successfully uninstalled {package_name}")
+            print(stdout)
+        else:
+            print(f"Uninstall failed: {stderr}")
+    
+    def list_packages(self):
+        """List installed packages on device"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        print("Listing installed packages...")
+        
+        # Execute list packages command
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'pm', 'list', 'packages']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            packages = stdout.strip().split('\n')
+            print(f"\nFound {len(packages)} packages:")
+            print("-" * 60)
+            for package in sorted(packages):
+                print(package.replace('package:', ''))
+        else:
+            print(f"Failed to list packages: {stderr}")
+    
+    def fastboot_menu(self):
+        """
+        Fastboot operations menu with extensive safety warnings
+        
+        This menu handles bootloader-level operations that can permanently
+        damage devices if used incorrectly.
+        """
+        print("\n" + "="*50)
+        print("⚠️  FASTBOOT MODE - EXTREME CAUTION REQUIRED ⚠️")
+        print("="*50)
+        print("Fastboot operations modify bootloader and firmware.")
+        print("Incorrect usage can permanently damage your device!")
+        print("Ensure you have proper recovery images before proceeding.")
+        print("="*50)
+        
+        if not self.confirm_action("Do you understand the risks and want to continue?"):
+            return
+        
+        while True:
+            print("\n" + "="*40)
+            print("FASTBOOT OPERATIONS")
+            print("="*40)
+            print("1. Check fastboot devices")
+            print("2. Get device info")
+            print("3. Flash partition")
+            print("4. Erase partition")
+            print("5. Boot image (temporary)")
+            print("6. Reboot device")
+            print("7. Unlock bootloader")
+            print("8. Lock bootloader")
+            print("9. Back to main menu")
+            
+            choice = input("Select operation: ").strip()
+            
+            if choice == '1':
+                self.fastboot_devices()
+            elif choice == '2':
+                self.fastboot_getvar()
+            elif choice == '3':
+                self.fastboot_flash()
+            elif choice == '4':
+                self.fastboot_erase()
+            elif choice == '5':
+                self.fastboot_boot()
+            elif choice == '6':
+                self.fastboot_reboot()
+            elif choice == '7':
+                self.fastboot_unlock()
+            elif choice == '8':
+                self.fastboot_lock()
+            elif choice == '9':
+                break
+            else:
+                print("Invalid choice")
+    
+    def fastboot_devices(self):
+        """List devices in fastboot mode"""
+        success, stdout, stderr = self.run_command([self.fastboot_path, 'devices'])
+        
+        if not success:
+            print(f"Error checking fastboot devices: {stderr}")
+            return
+        
+        print("\nFastboot devices:")
+        print("-" * 30)
+        if stdout.strip():
+            print(stdout)
+        else:
+            print("No devices in fastboot mode")
+    
+    def fastboot_getvar(self):
+        """Get device variables in fastboot mode"""
+        print("\nCommon variables to query:")
+        print("- version")
+        print("- product")
+        print("- secure")
+        print("- unlocked")
+        print("- all (shows all variables)")
+        
+        variable = input("Enter variable name: ").strip()
+        
+        command = [self.fastboot_path, 'getvar', variable]
+        success, stdout, stderr = self.run_command(command)
+        
+        # Fastboot often outputs to stderr instead of stdout
+        output = stderr if stderr else stdout
+        
+        if output:
+            print(f"\nVariable '{variable}':")
+            print("-" * 30)
+            print(output)
+        else:
+            print("No output received")
+    
+    def fastboot_flash(self):
+        """
+        Flash partition with extensive safety checks
+        
+        This is the most dangerous operation as it can permanently damage
+        the device if wrong images are flashed.
+        """
+        print("\n" + "⚠️"*20)
+        print("CRITICAL WARNING: PARTITION FLASHING")
+        print("⚠️"*20)
+        print("This operation can permanently damage your device!")
+        print("Ensure you have the correct image for your specific device model.")
+        print("Wrong images can cause permanent boot loops or brick your device.")
+        
+        if not self.confirm_action("Do you have the correct image and want to continue?"):
+            return
+        
+        partition = input("Enter partition name (boot, recovery, system, etc.): ").strip()
+        image_path = input("Enter image file path: ").strip()
+        
+        # Validate image file exists
+        if not os.path.exists(image_path):
+            print("Image file does not exist")
+            return
+        
+        # Check if it's a critical partition
+        if partition.lower() in self.critical_partitions:
+            print(f"\n⚠️  WARNING: '{partition}' is a critical partition!")
+            print("Flashing incorrect images to this partition can brick your device.")
+            
+            if not self.confirm_action(f"Are you absolutely sure you want to flash {partition}?"):
+                return
+        
+        # Show file information
+        file_size = os.path.getsize(image_path)
+        print(f"\nFile: {image_path}")
+        print(f"Size: {file_size / 1024 / 1024:.2f} MB")
+        
+        # Final confirmation
+        if not self.confirm_action(f"FINAL CONFIRMATION: Flash {image_path} to {partition}?"):
+            return
+        
+        # Execute flash command
+        command = [self.fastboot_path, 'flash', partition, image_path]
+        success, stdout, stderr = self.run_command(command, timeout=300)
+        
+        if success:
+            print(f"Successfully flashed {image_path} to {partition}")
+            print(stdout)
+        else:
+            print(f"Flash failed: {stderr}")
+    
+    def fastboot_erase(self):
+        """Erase partition with safety checks"""
+        print("\n⚠️  WARNING: PARTITION ERASE")
+        print("This will completely erase a partition!")
+        print("Erasing critical partitions can brick your device.")
+        
+        partition = input("Enter partition name to erase: ").strip()
+        
+        # Check if it's a critical partition
+        if partition.lower() in self.critical_partitions:
+            print(f"\n⚠️  CRITICAL WARNING: '{partition}' is a critical partition!")
+            print("Erasing this partition may make your device unbootable.")
+            
+            if not self.confirm_action(f"Are you sure you want to erase {partition}?"):
+                return
+        
+        # Final confirmation
+        if not self.confirm_action(f"FINAL CONFIRMATION: Erase partition {partition}?"):
+            return
+        
+        # Execute erase command
+        command = [self.fastboot_path, 'erase', partition]
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Successfully erased partition {partition}")
+            print(stdout)
+        else:
+            print(f"Erase failed: {stderr}")
+    
+    def fastboot_boot(self):
+        """Boot image temporarily without flashing"""
+        print("\nBoot image temporarily (doesn't flash to device)")
+        
+        image_path = input("Enter boot image path: ").strip()
+        
+        if not os.path.exists(image_path):
+            print("Image file does not exist")
+            return
+        
+        # Execute boot command
+        command = [self.fastboot_path, 'boot', image_path]
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print(f"Successfully booted {image_path}")
+            print(stdout)
+        else:
+            print(f"Boot failed: {stderr}")
+    
+    def fastboot_reboot(self):
+        """Reboot device from fastboot mode"""
+        print("\nReboot options:")
+        print("1. Normal reboot")
+        print("2. Reboot to bootloader")
+        print("3. Reboot to recovery")
+        
+        choice = input("Select reboot type: ").strip()
+        
+        if choice == '1':
+            command = [self.fastboot_path, 'reboot']
+        elif choice == '2':
+            command = [self.fastboot_path, 'reboot-bootloader']
+        elif choice == '3':
+            command = [self.fastboot_path, 'reboot', 'recovery']
+        else:
+            print("Invalid choice")
+            return
+        
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Reboot command sent successfully")
+            print(stdout)
+        else:
+            print(f"Reboot failed: {stderr}")
+    
+    def fastboot_unlock(self):
+        """Unlock bootloader with warnings"""
+        print("\n" + "⚠️"*25)
+        print("BOOTLOADER UNLOCK WARNING")
+        print("⚠️"*25)
+        print("Unlocking bootloader will:")
+        print("- Void your warranty")
+        print("- Erase all user data")
+        print("- Make device less secure")
+        print("- May prevent OTA updates")
+        print("⚠️"*25)
+        
+        if not self.confirm_action("Do you want to unlock the bootloader?"):
+            return
+        
+        # Execute unlock command
+        command = [self.fastboot_path, 'flashing', 'unlock']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Bootloader unlock command sent")
+            print("Check device screen for confirmation prompt")
+            print(stdout)
+        else:
+            print(f"Unlock failed: {stderr}")
+    
+    def fastboot_lock(self):
+        """Lock bootloader with warnings"""
+        print("\n⚠️  WARNING: BOOTLOADER LOCK")
+        print("Locking bootloader will:")
+        print("- Erase all user data")
+        print("- May brick device if custom firmware is installed")
+        print("- Restore factory security settings")
+        
+        if not self.confirm_action("Do you want to lock the bootloader?"):
+            return
+        
+        # Execute lock command
+        command = [self.fastboot_path, 'flashing', 'lock']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Bootloader lock command sent")
+            print("Check device screen for confirmation prompt")
+            print(stdout)
+        else:
+            print(f"Lock failed: {stderr}")
+    
+    def system_operations_menu(self):
+        """System-level operations menu"""
+        while True:
+            print("\n" + "="*40)
+            print("SYSTEM OPERATIONS")
+            print("="*40)
+            print("1. Reboot device")
+            print("2. Reboot to recovery")
+            print("3. Reboot to bootloader")
+            print("4. Get system properties")
+            print("5. Take screenshot")
+            print("6. Screen recording")
+            print("7. Logcat (view logs)")
+            print("8. Shell access")
+            print("9. Back to main menu")
+            
+            choice = input("Select operation: ").strip()
+            
+            if choice == '1':
+                self.reboot_device()
+            elif choice == '2':
+                self.reboot_recovery()
+            elif choice == '3':
+                self.reboot_bootloader()
+            elif choice == '4':
+                self.get_system_properties()
+            elif choice == '5':
+                self.take_screenshot()
+            elif choice == '6':
+                self.screen_recording()
+            elif choice == '7':
+                self.logcat()
+            elif choice == '8':
+                self.shell_access()
+            elif choice == '9':
+                break
+            else:
+                print("Invalid choice")
+    
+    def reboot_device(self):
+        """Reboot device normally"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        command = [self.adb_path, '-s', self.device_info.serial, 'reboot']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Device reboot initiated")
+        else:
+            print(f"Reboot failed: {stderr}")
+    
+    def reboot_recovery(self):
+        """Reboot device to recovery mode"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        command = [self.adb_path, '-s', self.device_info.serial, 'reboot', 'recovery']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Device rebooting to recovery mode")
+        else:
+            print(f"Reboot to recovery failed: {stderr}")
+    
+    def reboot_bootloader(self):
+        """Reboot device to bootloader/fastboot mode"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        command = [self.adb_path, '-s', self.device_info.serial, 'reboot', 'bootloader']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("Device rebooting to bootloader mode")
+        else:
+            print(f"Reboot to bootloader failed: {stderr}")
+    
+    def get_system_properties(self):
+        """Get device system properties"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'getprop']
+        success, stdout, stderr = self.run_command(command)
+        
+        if success:
+            print("\nSystem Properties:")
+            print("-" * 50)
+            
+            # Filter and display important properties
+            properties = stdout.strip().split('\n')
+            important_props = []
+            
+            for prop in properties:
+                if any(keyword in prop for keyword in ['ro.build', 'ro.product', 'ro.hardware', 'ro.bootloader']):
+                    important_props.append(prop)
+            
+            for prop in sorted(important_props):
+                print(prop)
+            
+            print(f"\nTotal properties: {len(properties)}")
+            print("Use 'adb shell getprop' for full list")
+        else:
+            print(f"Failed to get properties: {stderr}")
+    
+    def take_screenshot(self):
+        """Take device screenshot"""
+        if not self.device_info:
+            print("Please connect a device first")
+            return
+        
+        timestamp = int(time.time())
+        filename = f"screenshot_{timestamp}.png"
+        
+        # Take screenshot on device
+        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'screencap', '/sdcard/screenshot.png']
+        success, stdout, stderr = self.run_command(command)
+        
+        if not success:
