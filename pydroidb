@@ -63,7 +63,7 @@ def display_banner():
 ⠀⠀⠀⠀⠀⠀⠈⠉⠉⠀⠀⠀⠀⠉⠉⠁⠀⠀⠀⠀⠀⠀
 {Colors.ENDC}
 {Colors.BOLD}A comprehensive ADB automation tool for Android device management{Colors.ENDC}
-            {Colors.YELLOW}Made with ❤️ by 0xbv1 | 0xb0rn3{Colors.ENDC}
+{Colors.YELLOW}Made with ❤️ by 0xbv1 | 0xb0rn3 IG: theehiv3 Contact:0xb0rn3@proton.me {Colors.ENDC}
     """
     warning = f"""
 {Colors.BOLD}{Colors.RED}============================[ IMPORTANT SAFETY WARNING ]============================{Colors.ENDC}
