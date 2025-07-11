@@ -63,6 +63,176 @@ check_requirements() {
     $ADB start-server &>/dev/null && echo -e "${GREEN}ADB server started.${ENDC}"
 }
 
+setup_odin() {
+    if [[ "$OSTYPE" != "linux-gnu"* ]]; then
+        echo -e "${RED}Odin operations are only supported on Linux.${ENDC}"
+        return 1
+    fi
+    echo -e "${BLUE}Checking Odin4...${ENDC}"
+    if command -v odin4 &>/dev/null; then
+        echo -e "${GREEN}Odin4 is installed.${ENDC}"
+        return 0
+    fi
+    echo -e "${BLUE}Installing Odin4...${ENDC}"
+    if ! command -v curl &>/dev/null || ! command -v unzip &>/dev/null; then
+        echo -e "${BLUE}Installing curl and unzip...${ENDC}"
+        if [[ -f /etc/debian_version ]]; then
+            sudo apt update && sudo apt install -y curl unzip
+        elif [[ -f /etc/redhat-release ]]; then
+            sudo dnf install -y curl unzip
+        elif [[ -f /etc/arch-release ]]; then
+            sudo pacman -S --noconfirm curl unzip
+        elif [[ -f /etc/SuSE-release ]]; then
+            sudo zypper install -y curl unzip
+        else
+            echo -e "${RED}curl and unzip required. Install manually.${ENDC}"
+            return 1
+        fi
+    fi
+    TEMP_DIR=$(mktemp -d)
+    curl -L https://technastic.com/wp-content/uploads/2023/06/Odin4-Linux.zip -o "$TEMP_DIR/Odin4-Linux.zip"
+    unzip "$TEMP_DIR/Odin4-Linux.zip" -d "$TEMP_DIR"
+    ODIN_BINARY=$(find "$TEMP_DIR" -name "odin4" -type f)
+    if [[ -z "$ODIN_BINARY" ]]; then
+        echo -e "${RED}Failed to find odin4 binary in zip.${ENDC}"
+        rm -rf "$TEMP_DIR"
+        return 1
+    fi
+    sudo cp "$ODIN_BINARY" /usr/local/bin/odin4
+    sudo chmod +x /usr/local/bin/odin4
+    echo -e "${GREEN}Odin4 installed successfully.${ENDC}"
+    rm -rf "$TEMP_DIR"
+    UDEV_FILE="/etc/udev/rules.d/51-android.rules"
+    if [[ ! -f "$UDEV_FILE" ]] || ! grep -q 'ATTR{idVendor}=="04e8"' "$UDEV_FILE"; then
+        echo -e "${BLUE}Setting up udev rules for Samsung devices...${ENDC}"
+        echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0666", GROUP="plugdev"' | sudo tee -a "$UDEV_FILE"
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger
+    fi
+    MODPROBE_FILE="/etc/modprobe.d/cdc_acm-blacklist.conf"
+    if [[ ! -f "$MODPROBE_FILE" ]] || ! grep -q 'blacklist cdc_acm' "$MODPROBE_FILE"; then
+        echo -e "${BLUE}Blacklisting cdc_acm module...${ENDC}"
+        echo "blacklist cdc_acm" | sudo tee "$MODPROBE_FILE"
+        sudo rmmod cdc_acm 2>/dev/null
+    fi
+}
+
+get_odin_device() {
+    echo -e "${BLUE}Listing devices in download mode...${ENDC}"
+    DEVICES=$(sudo odin4 -l 2>/dev/null)
+    if [[ -z "$DEVICES" ]]; then
+        echo -e "${RED}No devices found. Ensure device is in download mode (Power + Volume Down + Home, then Volume Up).${ENDC}"
+        return 1
+    fi
+    DEVICE_COUNT=$(echo "$DEVICES" | wc -l)
+    if [[ $DEVICE_COUNT -gt 1 ]]; then
+        echo -e "${GREEN}Multiple devices found:${ENDC}"
+        echo "$DEVICES" | nl -w 2 -s '. '
+        read -p "Select device (number): " CHOICE
+        if [[ $CHOICE =~ ^[0-9]+$ ]] && [[ $CHOICE -ge 1 ]] && [[ $CHOICE -le $DEVICE_COUNT ]]; then
+            DEVICE_PATH=$(echo "$DEVICES" | sed -n "${CHOICE}p")
+        else
+            echo -e "${RED}Invalid selection.${ENDC}"
+            return 1
+        fi
+    else
+        DEVICE_PATH=$(echo "$DEVICES" | head -1)
+    fi
+    echo "$DEVICE_PATH"
+}
+
+odin_flash_firmware() {
+    echo -e "${BOLD}${GREEN}Flash Samsung Firmware${ENDC}"
+    echo -e "${RED}Ensure device is in download mode (Power + Volume Down + Home, then Volume Up).${ENDC}"
+    read -p "Path to BL file: " BL
+    read -p "Path to AP file: " AP
+    read -p "Path to CP file: " CP
+    read -p "Path to CSC file: " CSC
+    if [[ ! -f "$BL" || ! -f "$AP" || ! -f "$CP" || ! -f "$CSC" ]]; then
+        echo -e "${RED}One or more files do not exist.${ENDC}"
+        return
+    fi
+    DEVICE_PATH=$(get_odin_device)
+    if [[ -z "$DEVICE_PATH" ]]; then return; fi
+    confirm_action "Flash firmware to device $DEVICE_PATH?" || return
+    CMD="sudo odin4 -d \"$DEVICE_PATH\" -b \"$BL\" -a \"$AP\" -c \"$CP\" -s \"$CSC\""
+    if confirm_action "Enable NAND erase? This will wipe all data."; then
+        CMD="$CMD -e"
+    fi
+    run_command "$CMD" $FASTBOOT_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Firmware flash completed.${ENDC}" || echo -e "${RED}Firmware flash failed.${ENDC}"
+}
+
+odin_flash_twrp() {
+    echo -e "${BOLD}${GREEN}Flash TWRP Recovery${ENDC}"
+    echo -e "${RED}Ensure device is in download mode (Power + Volume Down + Home, then Volume Up).${ENDC}"
+    read -p "Path to TWRP image (e.g., twrp.tar): " TWRP
+    if [[ ! -f "$TWRP" ]]; then
+        echo -e "${RED}File does not exist.${ENDC}"
+        return
+    fi
+    read -p "Path to vbmeta image (optional, press Enter to skip): " VBMETA
+    DEVICE_PATH=$(get_odin_device)
+    if [[ -z "$DEVICE_PATH" ]]; then return; fi
+    confirm_action "Flash TWRP to device $DEVICE_PATH?" || return
+    CMD="sudo odin4 -d \"$DEVICE_PATH\" -a \"$TWRP\""
+    if [[ -n "$VBMETA" && -f "$VBMETA" ]]; then
+        CMD="$CMD -c \"$VBMETA\""
+    fi
+    run_command "$CMD" $FASTBOOT_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}TWRP flash completed.${ENDC}" || echo -e "${RED}TWRP flash failed.${ENDC}"
+}
+
+odin_reboot() {
+    echo -e "${BOLD}${GREEN}Reboot Device${ENDC}"
+    echo -e "${RED}Ensure device is in download mode (Power + Volume Down + Home, then Volume Up).${ENDC}"
+    echo "1. Reboot to Normal Mode"
+    echo "2. Reboot to Download Mode"
+    read -p "Select option (1-2): " CHOICE
+    DEVICE_PATH=$(get_odin_device)
+    if [[ -z "$DEVICE_PATH" ]]; then return; fi
+    case $CHOICE in
+        1)
+            confirm_action "Reboot to normal mode?" || return
+            run_command "sudo odin4 -d \"$DEVICE_PATH\" --reboot" $DEFAULT_TIMEOUT
+            [[ $? -eq 0 ]] && echo -e "${GREEN}Reboot to normal mode completed.${ENDC}"
+            ;;
+        2)
+            confirm_action "Reboot to download mode?" || return
+            run_command "sudo odin4 -d \"$DEVICE_PATH\" --redownload" $DEFAULT_TIMEOUT
+            [[ $? -eq 0 ]] && echo -e "${GREEN}Reboot to download mode completed.${ENDC}"
+            ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}" ;;
+    esac
+}
+
+odin_menu() {
+    setup_odin || return
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${GREEN}🔧 SAMSUNG ODIN OPERATIONS${ENDC}"
+        echo -e "${RED}Ensure your Samsung device is in download mode (Power + Volume Down + Home, then Volume Up).${ENDC}"
+        echo "----------------------------------------"
+        echo "1. Flash Firmware"
+        echo "2. Flash TWRP Recovery"
+        echo "3. Reboot Device"
+        echo "4. Check Odin Version"
+        echo "5. Back to Main Menu"
+        echo "----------------------------------------"
+        read -p "Select option: " CHOICE
+        clear_screen
+        case $CHOICE in
+            1) odin_flash_firmware ;;
+            2) odin_flash_twrp ;;
+            3) odin_reboot ;;
+            4) run_command "sudo odin4 -v" $DEFAULT_TIMEOUT ;;
+            5) break ;;
+            *) echo -e "${RED}Invalid choice.${ENDC}" ;;
+        esac
+        read -p "Press Enter to return..."
+    done
+}
+
 get_device_info() {
     echo -e "${BLUE}Scanning devices...${ENDC}"
     DEVICES=$($ADB devices | tail -n +2 | awk '{print $1 "\t" $2}')
@@ -822,33 +992,29 @@ system_operations_menu() {
         echo -e "${BOLD}${GREEN}⚙️ SYSTEM OPERATIONS${ENDC}"
         echo "----------------------------------------"
         echo "1. Reboot Device"
-        echo "2. Reboot to Recovery"
-        echo "3. Reboot to Bootloader"
-        echo "4. Take Screenshot"
-        echo "5. Screen Recording"
-        echo "6. View Device Logs (Logcat)"
-        echo "7. Interactive Shell"
-        echo "8. Get Battery Info"
-        echo "9. Get Device IP Address"
-        echo "10. Toggle Wi-Fi"
-        echo "11. Advanced ADB Operations"
-        echo "12. Back to Main Menu"
+        echo "2. Take Screenshot"
+        echo "3. Screen Recording"
+        echo "4. View Device Logs (Logcat)"
+        echo "5. Interactive Shell"
+        echo "6. Get Battery Info"
+        echo "7. Get Device IP Address"
+        echo "8. Toggle Wi-Fi"
+        echo "9. Advanced ADB Operations"
+        echo "10. Back to Main Menu"
         echo "----------------------------------------"
         read -p "Select option: " CHOICE
         clear_screen
         case $CHOICE in
             1) reboot_device ;;
-            2) reboot_device recovery ;;
-            3) reboot_device bootloader ;;
-            4) take_screenshot ;;
-            5) screen_recording ;;
-            6) logcat ;;
-            7) shell_access ;;
-            8) get_battery_info ;;
-            9) get_device_ip ;;
-            10) toggle_wifi ;;
-            11) adb_advanced ;;
-            12) break ;;
+            2) take_screenshot ;;
+            3) screen_recording ;;
+            4) logcat ;;
+            5) shell_access ;;
+            6) get_battery_info ;;
+            7) get_device_ip ;;
+            8) toggle_wifi ;;
+            9) adb_advanced ;;
+            10) break ;;
             *) echo -e "${RED}Invalid choice.${ENDC}" ;;
         esac
         read -p "Press Enter to return..."
@@ -880,8 +1046,9 @@ main_menu() {
         echo "2. File Operations"
         echo "3. System Operations"
         echo "4. Fastboot Operations (DANGEROUS)"
-        echo "5. Refresh Device List"
-        echo "6. Exit"
+        echo "5. Samsung Odin Operations (Linux only)"
+        echo "6. Refresh Device List"
+        echo "7. Exit"
         read -p "Select option: " CHOICE
         if [[ -n "$DEVICE_INFO" && $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+') != "device" && $CHOICE =~ [23] ]]; then
             echo -e "${RED}Action requires device in 'device' mode. Current state: $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+').${ENDC}"
@@ -893,8 +1060,9 @@ main_menu() {
             2) [[ -n "$DEVICE_INFO" ]] && file_operations_menu ;;
             3) [[ -n "$DEVICE_INFO" ]] && system_operations_menu ;;
             4) fastboot_menu ;;
-            5) DEVICE_INFO="" ;;
-            6) echo -e "${BOLD}${BLUE}Goodbye!${ENDC}"; exit 0 ;;
+            5) odin_menu ;;
+            6) DEVICE_INFO="" ;;
+            7) echo -e "${BOLD}${BLUE}Goodbye!${ENDC}"; exit 0 ;;
             *) echo -e "${RED}Invalid choice.${ENDC}"; sleep 1 ;;
         esac
     done
