@@ -1,307 +1,389 @@
-# Pydroidb 🤖
+# Pydroidb - Advanced ADB & Fastboot Automation Tool
 
-**A comprehensive ADB automation tool for Android device management**
+![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Shell](https://img.shields.io/badge/shell-bash-yellow.svg)
 
-[![Python](https://img.shields.io/badge/Python-3.7%2B-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/0xb0rn3/pydroidb)
+> **⚠️ SAFETY WARNING**  
+> This tool modifies device firmware and can cause permanent damage if used incorrectly. Always back up your data and have official recovery images available. **USE AT YOUR OWN RISK.**
 
-> **⚠️ IMPORTANT SAFETY WARNING**  
-> This tool deals with device firmware and system partitions. Incorrect usage can result in device boot loops or permanent damage. Always ensure you have proper recovery images before flashing and test commands on non-critical devices first.
+## 🚀 Overview
 
-## 🎯 Overview
-
-Pydroidb is a powerful Python-based wrapper for ADB (Android Debug Bridge) and Fastboot commands, designed to simplify and safeguard Android device operations. Built with extensive safety checks and user-friendly interfaces, it provides both novice and advanced users with a comprehensive toolkit for Android device management.
+**Pydroidb** is a comprehensive command-line automation tool for Android Debug Bridge (ADB) and Fastboot operations. It provides an intuitive menu-driven interface for managing Android devices, performing file operations, system diagnostics, and advanced bootloader manipulation.
 
 ### ✨ Key Features
 
-- **🛡️ Safety First**: Built-in safety checks for critical operations
-- **📱 Multi-Device Support**: Handle multiple connected devices seamlessly  
-- **🔧 Comprehensive Operations**: File transfer, app management, system operations, and more
-- **⚡ Fastboot Integration**: Full bootloader and firmware management capabilities
-- **📊 Device Information**: Detailed device specs and system properties
-- **💾 Backup & Restore**: Complete device backup and restore functionality
-- **🔍 Advanced Debugging**: Logcat monitoring and shell access
-- **📸 Media Capture**: Screenshots and screen recordings
-- **🌐 Network Operations**: TCP/IP connections and port forwarding
+- **🔧 Complete ADB Integration** - Full device management and debugging capabilities
+- **⚡ Advanced Fastboot Operations** - Bootloader manipulation, partition flashing, and recovery
+- **📁 Intelligent File Management** - Batch operations, APK installation, and directory synchronization
+- **🖥️ System Diagnostics** - Battery monitoring, logcat analysis, and device information
+- **🔒 Security-First Design** - Multiple confirmation prompts for dangerous operations
+- **🌐 Cross-Platform Support** - Works on Linux, macOS, and Windows (with WSL)
+- **📱 Multi-Device Support** - Automatic detection and selection of multiple connected devices
 
-## 🚀 Installation
+## 📋 Prerequisites
 
-### Prerequisites
+- **Operating System**: Linux, macOS, or Windows with WSL
+- **Shell**: Bash 4.0 or later
+- **Dependencies**: `adb` and `fastboot` (auto-installed if missing)
+- **Device Requirements**: Android device with USB debugging enabled
+- **Permissions**: Root/sudo access for initial setup
 
-- Python 3.7 or higher
-- Android SDK Platform Tools (ADB and Fastboot)
-- USB debugging enabled on target device
+## 🛠️ Installation
 
-### Quick Setup
+### Quick Start
 
-1. **Clone the repository**
+```bash
+# Clone the repository
+git clone https://github.com/0xb0rn3/pydroidb.git
+
+# Navigate to directory
+cd pydroidb
+
+# Make executable
+chmod +x pydroidb
+
+# Run the tool
+./pydroidb
+```
+
+### Manual Installation
+
+1. **Download the script:**
    ```bash
-   git clone https://github.com/0xb0rn3/pydroidb.git
-   cd pydroidb
-   ```
-
-2. **Install Android SDK Platform Tools**
-   
-   **Linux/macOS:**
-   ```bash
-   # Using package manager
-   sudo apt install android-tools-adb android-tools-fastboot  # Ubuntu/Debian
-   yay -S android-sdk-platform-tools android-bash-completion  # ARCHLINUX
-   brew install android-platform-tools  # macOS
-   ```
-   
-   **Windows/Manual Installation:**
-   - Download from [Android Developer Site](https://developer.android.com/studio/releases/platform-tools)
-   - Extract and add to system PATH
-
-3. **Enable USB Debugging**
-   - Go to Settings > About Phone
-   - Tap "Build Number" 7 times to enable Developer Options
-   - Go to Settings > Developer Options > Enable USB Debugging
-
-4. **Run Pydroidb**
-   ```bash
+   wget https://raw.githubusercontent.com/0xb0rn3/pydroidb/main/pydroidb
    chmod +x pydroidb
-   ./pydroidb
    ```
 
-## 📋 Features Overview
+2. **Install dependencies (if needed):**
+   - **Ubuntu/Debian**: `sudo apt install android-tools-adb android-tools-fastboot`
+   - **Fedora/CentOS**: `sudo dnf install android-tools`
+   - **Arch Linux**: `sudo pacman -S android-tools`
+   - **macOS**: `brew install android-platform-tools`
 
-### 🔌 Device Management
-- **Auto-detection** of connected devices
-- **Multi-device support** with device selection
-- **Comprehensive device information** display
-- **Connection state monitoring**
+## 🎯 Usage
+
+### Basic Usage
+
+```bash
+# Standard execution
+./pydroidb
+
+# With verbose output
+./pydroidb --verbose
+
+# Check version
+./pydroidb --version
+```
+
+### Device Preparation
+
+1. **Enable Developer Options:**
+   - Go to Settings → About Phone
+   - Tap "Build Number" 7 times
+
+2. **Enable USB Debugging:**
+   - Settings → Developer Options → USB Debugging
+
+3. **Connect Device:**
+   - Connect via USB cable
+   - Authorize the computer when prompted
+
+## 📖 Feature Documentation
+
+### 🔍 Device Information
+
+- **Real-time device detection** with automatic authorization status
+- **Comprehensive device profiling** including:
+  - Model, manufacturer, and serial number
+  - Android version and SDK level
+  - Bootloader and kernel information
+  - Hardware architecture and specifications
+  - Connection state and authorization status
 
 ### 📁 File Operations
-- **Push/Pull files** between device and computer
-- **Directory listing** with detailed permissions
-- **APK installation** and management
-- **Package listing** and uninstallation
-- **Batch file operations**
+
+#### Single File Operations
+- **Push files to device** with progress tracking
+- **Pull files from device** with size validation
+- **APK installation** with package verification
+- **Package uninstallation** with safety confirmations
+
+#### Batch Operations
+- **Directory synchronization** - Push/pull entire directories
+- **Multiple APK installation** - Install all APKs in a directory
+- **Smart file filtering** - Automatic file type detection
+- **Progress tracking** - Real-time operation status
+
+#### Package Management
+- **List installed packages** with filtering options:
+  - All packages
+  - System packages only
+  - User-installed packages
+  - Enabled/disabled packages
+- **Package information** extraction and display
 
 ### ⚙️ System Operations
-- **Device reboot** (normal, recovery, bootloader)
-- **System properties** retrieval
-- **Screenshot capture** with timestamp
-- **Screen recording** with configurable duration
-- **Real-time logcat** monitoring
-- **Interactive shell access**
+
+#### Device Control
+- **Reboot options:**
+  - Normal system reboot
+  - Recovery mode
+  - Bootloader/fastboot mode
+- **Wi-Fi management** - Enable/disable wireless connectivity
+- **Battery monitoring** - Detailed power consumption analysis
+
+#### Media Capture
+- **Screenshots** - High-quality screen capture with timestamp
+- **Screen recording** - Configurable quality and duration:
+  - Standard quality (default)
+  - High quality (8Mbps)
+  - Low quality (2Mbps)
+  - Duration: 1-180 seconds
+
+#### System Diagnostics
+- **Live logcat** with filtering options:
+  - Filter by tag
+  - Filter by priority level
+  - Real-time log streaming
+- **Interactive shell access** - Direct command execution
+- **System property inspection** - Complete device configuration
+- **Network information** - IP address detection and connectivity
 
 ### 🔥 Fastboot Operations
-> **⚠️ CRITICAL WARNING**: Fastboot operations modify bootloader and firmware. Incorrect usage can permanently damage your device!
 
-- **Partition flashing** with safety checks
-- **Partition erasing** with confirmation prompts
-- **Bootloader unlock/lock** operations
-- **Temporary boot** from images
-- **Device variable** inspection
-- **Critical partition** protection
+> **⚠️ EXTREME CAUTION REQUIRED**  
+> Fastboot operations can permanently damage your device. Ensure you have:
+> - Correct firmware files for your exact device model
+> - Official recovery images
+> - Complete device backup
 
-### 💾 Backup & Restore
-- **Full device backup** creation
-- **Application-specific backups**
-- **Backup restoration** with safety checks
-- **Backup content** analysis
-- **Progress monitoring** for large backups
+#### Partition Management
+- **Flash individual partitions** - Boot, recovery, system, etc.
+- **Erase partitions** - Selective data removal
+- **Format partitions** - Filesystem recreation (ext4, f2fs)
+- **Flash all partitions** - Complete firmware installation
 
-### 🌐 Advanced Operations
-- **TCP/IP connection** setup
-- **Port forwarding** (local and reverse)
-- **ADB server** management
-- **Device architecture** information
-- **Memory and CPU** statistics
-- **USB debugging** status checks
+#### Bootloader Operations
+- **Unlock bootloader** - Enable custom firmware (⚠️ WIPES DATA)
+- **Lock bootloader** - Restore stock security (⚠️ DANGEROUS WITH CUSTOM SOFTWARE)
+- **A/B slot management** - Set active boot slot
+- **Device variable inspection** - Complete bootloader information
+
+#### Advanced Features
+- **Boot images** - Test kernels without flashing
+- **Device wipe** - Factory reset via fastboot
+- **OEM commands** - Manufacturer-specific operations
+- **Recovery operations** - Custom recovery management
+
+### 🚀 Advanced ADB Operations
+
+#### Backup & Restore
+- **Complete device backup** - Full system and data backup
+- **Selective restore** - Choose specific components to restore
+- **Bug report generation** - Comprehensive system diagnostics
+
+#### Development Features
+- **Wi-Fi debugging** - Wireless ADB connection setup
+- **Screen mirroring** - Integration with scrcpy
+- **Input simulation** - Automated testing support
+- **Activity launching** - Direct app component access
+
+## 🔧 Configuration
+
+### Environment Variables
+
+```bash
+# Custom ADB path
+export ADB_PATH="/custom/path/to/adb"
+
+# Custom Fastboot path
+export FASTBOOT_PATH="/custom/path/to/fastboot"
+
+# Default timeouts (seconds)
+export PYDROIDB_DEFAULT_TIMEOUT=60
+export PYDROIDB_FILE_TIMEOUT=300
+export PYDROIDB_BACKUP_TIMEOUT=3600
+export PYDROIDB_FASTBOOT_TIMEOUT=600
+```
+
+### Device-Specific Settings
+
+Create a `.pydroidb_config` file in your home directory:
+
+```bash
+# Device-specific configurations
+DEVICE_CONFIGS=(
+    "serial1:timeout=120:quality=high"
+    "serial2:timeout=60:quality=standard"
+)
+
+# Default screenshot quality
+SCREENSHOT_QUALITY="high"
+
+# Default recording settings
+RECORDING_QUALITY="standard"
+RECORDING_DURATION=30
+```
 
 ## 🛡️ Safety Features
 
-### Multi-Layer Protection
-1. **Critical Partition Detection**: Automatic identification of system-critical partitions
-2. **Confirmation Prompts**: Multi-step confirmation for dangerous operations
-3. **File Validation**: Extension and size checks for firmware files
-4. **Command Timeouts**: Automatic timeout for long-running operations
-5. **Error Handling**: Comprehensive error catching and reporting
+### Multi-Layer Confirmations
+- **Double confirmation** for destructive operations
+- **Partition-specific warnings** for critical system areas
+- **Automatic backup suggestions** before major operations
 
-### Safety Mode
-- **Always enabled** by default
-- **Cannot be disabled** for critical operations
-- **Extensive warnings** for dangerous commands
-- **Automatic backups** before major operations
+### Error Handling
+- **Timeout protection** - Prevents infinite hanging
+- **Command validation** - Syntax checking before execution
+- **Graceful failure recovery** - Clean exit on errors
 
-## 📖 Usage Examples
+### Security Measures
+- **Device authorization checking** - Prevents unauthorized access
+- **File existence validation** - Prevents invalid operations
+- **Permission verification** - Ensures proper access levels
 
-### Basic Device Information
-```bash
-# Launch Pydroidb
-chmod +x pydroidb
-./pydroidb
-
-# Select option 1 to view device information
-# The tool will display:
-# - Device model and serial
-# - Android version and SDK level
-# - Bootloader version
-# - Connection state
-```
-
-### File Operations
-```bash
-# Push file to device
-Select: File Operations > Push file to device
-Local file path: /home/user/file.txt
-Device path: /sdcard/file.txt
-
-# Install APK
-Select: File Operations > Install APK
-APK path: /home/user/app.apk
-```
-
-### System Operations
-```bash
-# Take screenshot
-Select: System Operations > Take screenshot
-# Screenshot saved as screenshot_[timestamp].png
-
-# Screen recording
-Select: System Operations > Screen recording
-Duration: 30 seconds
-# Recording saved as screenrecord_[timestamp].mp4
-```
-
-### Fastboot Operations
-```bash
-# WARNING: Only use if you understand the risks!
-Select: Fastboot Operations > Flash partition
-Partition: recovery
-Image path: /path/to/recovery.img
-# Multiple confirmation prompts will appear
-```
-
-## 🔧 Advanced Configuration
-
-### Custom ADB/Fastboot Paths
-The tool automatically detects ADB and Fastboot in common locations:
-- `/usr/bin/adb` (Linux)
-- `/usr/local/bin/adb` (macOS)
-- `~/Android/Sdk/platform-tools/adb` (Manual installation)
-
-### Timeout Configuration
-Default timeouts can be adjusted in the source code:
-- Standard commands: 30 seconds
-- File operations: 120 seconds
-- Backup operations: 3600 seconds (1 hour)
-- Fastboot operations: 300 seconds
-
-### Device Selection
-For multiple devices, the tool provides an interactive selection menu:
-```
-Multiple devices connected:
-1. ABC123456789 (device)
-2. XYZ987654321 (device)
-Select device (number): 1
-```
-
-## 🐛 Troubleshooting
+## 🔍 Troubleshooting
 
 ### Common Issues
 
-**"ADB not found" Error**
+#### Device Not Detected
 ```bash
-# Install Android SDK Platform Tools
-sudo apt install android-tools-adb  # Linux
-brew install android-platform-tools  # macOS
+# Check USB debugging
+adb devices
+
+# Restart ADB server
+adb kill-server
+adb start-server
+
+# Check device authorization
+./pydroidb  # Will show authorization status
 ```
 
-**"No devices connected"**
-- Check USB cable and connection
-- Verify USB debugging is enabled
-- Try different USB port
-- Check device authorization prompt
+#### Permission Denied
+```bash
+# Check udev rules (Linux)
+sudo usermod -a -G plugdev $USER
 
-**"Device unauthorized"**
-- Check device screen for authorization prompt
-- Tap "OK" to authorize computer
-- Ensure "Always allow from this computer" is checked
+# Reload rules
+sudo udevadm control --reload-rules
+```
 
-**Fastboot device not detected**
-- Reboot device to bootloader mode
-- Check device drivers (Windows)
-- Try different USB cable
-- Verify bootloader is unlocked (if required)
+#### Fastboot Issues
+```bash
+# Check fastboot devices
+fastboot devices
 
-### Debug Mode
-Enable verbose output by modifying the source:
-```python
-# In run_command method
-print(f"Executing: {' '.join(command)}")  # Already enabled
+# Verify bootloader unlock
+fastboot oem device-info
+```
+
+### Error Codes
+
+| Code | Description | Solution |
+|------|-------------|----------|
+| 124  | Command timeout | Check device connection |
+| 1    | Command failed | Review command syntax |
+| 2    | File not found | Verify file paths |
+| 3    | Permission denied | Check device authorization |
+
+## 📊 Performance Optimization
+
+### File Transfer Optimization
+- **Automatic compression** for large files
+- **Parallel transfers** where supported
+- **Resume capability** for interrupted transfers
+- **Bandwidth throttling** for network operations
+
+### Memory Management
+- **Efficient buffering** for large operations
+- **Automatic cleanup** of temporary files
+- **Memory monitoring** during intensive operations
+
+## 🔗 Integration
+
+### CI/CD Integration
+```yaml
+# GitHub Actions example
+- name: Setup Android Device
+  run: |
+    chmod +x pydroidb
+    ./pydroidb --batch --operation=install --file=app.apk
+```
+
+### Script Integration
+```bash
+#!/bin/bash
+# Automated testing script
+./pydroidb --batch --operation=screenshot --output=test_results/
+./pydroidb --batch --operation=logcat --filter=TestTag > test.log
 ```
 
 ## 🤝 Contributing
 
-We welcome contributions! Please follow these guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Commit your changes** (`git commit -m 'Add amazing feature'`)
-4. **Push to the branch** (`git push origin feature/amazing-feature`)
-5. **Open a Pull Request**
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 
 ### Development Setup
 ```bash
 git clone https://github.com/0xb0rn3/pydroidb.git
 cd pydroidb
-python3 -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or
-venv\Scripts\activate  # Windows
+chmod +x pydroidb
+./pydroidb --test  # Run test suite
 ```
 
 ### Code Style
-- Follow PEP 8 guidelines
-- Use type hints where appropriate
-- Add docstrings for all functions
-- Include safety checks for dangerous operations
+- Follow bash best practices
+- Use meaningful variable names
+- Add comments for complex operations
+- Test on multiple platforms
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## ⚠️ Disclaimer
+## 🔐 Security Policy
 
-**USE AT YOUR OWN RISK**
+Please report security vulnerabilities to [security@example.com](mailto:security@example.com).
 
-This tool is provided as-is without any warranties. The authors are not responsible for any damage to devices, data loss, or other issues that may arise from using this tool. Always:
+## 🆘 Support
 
-- Test on non-critical devices first
-- Create backups before major operations
-- Understand the commands you're executing
-- Have recovery images available
+- **Issues**: [GitHub Issues](https://github.com/0xb0rn3/pydroidb/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/0xb0rn3/pydroidb/discussions)
+- **Documentation**: [Wiki](https://github.com/0xb0rn3/pydroidb/wiki)
+
+## 📈 Changelog
+
+### v0.0.1 (Current)
+- Initial release
+- Complete ADB and Fastboot integration
+- Multi-device support
+- Cross-platform compatibility
+- Safety features and confirmations
 
 ## 🙏 Acknowledgments
 
-- **Android Open Source Project** for ADB and Fastboot tools
-- **Python Community** for excellent libraries and documentation
-- **Android Developer Community** for extensive documentation and guides
+- **Android Open Source Project** - For ADB and Fastboot tools
+- **Community Contributors** - For testing and feedback
+- **Security Researchers** - For vulnerability disclosure
 
-## 📞 Support
+## 📱 Device Compatibility
 
-- **GitHub Issues**: [Report bugs and request features](https://github.com/0xb0rn3/pydroidb/issues)
-- **Discussions**: [Community discussions and help](https://github.com/0xb0rn3/pydroidb/discussions)
-- **Documentation**: [Wiki and detailed guides](https://github.com/0xb0rn3/pydroidb/wiki)
+### Tested Devices
+- Google Pixel series
+- Samsung Galaxy series
+- OnePlus devices
+- Xiaomi devices
+- Generic Android devices
 
-## 🔗 Related Projects
-
-- [Android SDK Platform Tools](https://developer.android.com/studio/releases/platform-tools)
-- [ADB Documentation](https://developer.android.com/studio/command-line/adb)
-- [Fastboot Documentation](https://android.googlesource.com/platform/system/core/+/master/fastboot/)
+### Bootloader Support
+- Unlocked bootloaders
+- Custom recovery (TWRP, CWM)
+- A/B partition schemes
+- Legacy partition layouts
 
 ---
 
-<div align="center">
-
 **Made with ❤️ by [0xbv1 | 0xb0rn3](https://github.com/0xb0rn3)**
 
-*If you find this tool helpful, please consider giving it a ⭐ star!*
-
-</div>
+> **Disclaimer**: This tool is for educational and development purposes. Always backup your data and understand the risks before performing any operations on your device.
