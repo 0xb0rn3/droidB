@@ -1,821 +1,904 @@
-#!/usr/bin/env python3
-"""
-Pydroidb: A comprehensive ADB and Fastboot automation tool.
-
-This script provides a safe and user-friendly command-line interface
-for a wide range of Android device management tasks.
-
-Author: 0xbv1 | 0xb0rn3
-GitHub: https://github.com/0xb0rn3/pydroidb
-"""
-
-import subprocess
-import os
-import sys
-import time
-import platform
-from pathlib import Path
-from typing import List, Optional, Tuple, Dict
-from dataclasses import dataclass
-
-# --- UI and Color Definitions ---
-
-def clear_screen():
-    """Clears the console screen."""
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-class Colors:
-    """ANSI color codes for console output."""
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-def display_banner():
-    """Displays the tool's startup banner and information."""
-    pydroid_ascii = [
-        "██████╗ ██╗   ██╗██████╗  ██████╗ ██╗ ██████╗ ██████╗         ",
-        "██╔══██╗╚██╗ ██╔╝██╔══██╗██╔═══██╗██║██╔═══██╗██╔══██╗             ",
-        "██████╔╝ ╚████╔╝ ██████╔╝██║   ██║██║██║   ██║██████╔╝",
-        "██╔═══╝   ╚██╔╝  ██╔══██╗██║   ██║██║██║   ██║██╔══██╗   ",
-        "██║        ██║   ██████╔╝╚██████╔╝██║╚██████╔╝██████╔╝",
-        "╚═╝        ╚═╝   ╚═════╝  ╚═════╝ ╚═╝ ╚═════╝ ╚═════╝"
-    ]
-
-    android_ascii = [
-        "⠀⠀⠀⠀⢀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⡀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠙⢷⣤⣤⣴⣶⣶⣦⣤⣤⡾⠋⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⣼⣿⣿⣉⣹⣿⣿⣿⣿⣏⣉⣿⣿⣧⠀⠀⠀⠀",
-        "⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀",
-        "⣠⣄⠀⢠⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⡄⠀⣠⣄",
-        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
-        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
-        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
-        "⣿⣿⡇⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣿",
-        "⠻⠟⠁⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠈⠻⠟",
-        "⠀⠀⠀⠀⠉⠉⣿⣿⣿⡏⠉⠉⢹⣿⣿⣿⠉⠉⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⣿⣿⣿⡇⠀⠀⢸⣿⣿⣿⠀⠀⠀⠀⠀⠀",
-        "⠀⠀⠀⠀⠀⠀⠈⠉⠉⠀⠀⠀⠀⠉⠉⠁⠀⠀⠀⠀⠀⠀"
-    ]
-
-    # Combine the ASCII arts side by side
-    max_len = max(len(pydroid_ascii), len(android_ascii))
-    pydroid_ascii += [' ' * len(pydroid_ascii[0])] * (max_len - len(pydroid_ascii))
-    android_ascii += [' ' * len(android_ascii[0])] * (max_len - len(android_ascii))
-
-    combined_banner = "\n".join([f"{Colors.BOLD}{Colors.BLUE}{p_line}  {a_line}{Colors.ENDC}" for p_line, a_line in zip(pydroid_ascii, android_ascii)])
-    
-    banner = f"""
-{combined_banner}
-
-{Colors.BOLD}A comprehensive ADB automation tool for Android device management{Colors.ENDC}
-{Colors.YELLOW}Made with ❤️ by 0xbv1 | 0xb0rn3 IG: theehiv3 Contact: 0xb0rn3@proton.me {Colors.ENDC}
-    """
-    warning = f"""
-{Colors.BOLD}{Colors.RED}============================[ IMPORTANT SAFETY WARNING ]============================{Colors.ENDC}
-{Colors.YELLOW}
-- This tool deals with device firmware and can cause permanent damage if used incorrectly.
-- Always back up your data and have official recovery images for your device model.
-- The author is not responsible for any damage to your device. {Colors.BOLD}USE AT YOUR OWN RISK.{Colors.ENDC}
-{Colors.BOLD}{Colors.RED}=================================================================================={Colors.ENDC}
-    """
-    print(banner)
-    print(warning)
-    input(f"{Colors.YELLOW}Press Enter to continue...{Colors.ENDC}")
-
-
-@dataclass
-class DeviceInfo:
-    """Stores comprehensive device information for safety checks."""
-    serial: str
-    model: str
-    android_version: str
-    sdk_version: str
-    bootloader_version: str
-    state: str  # device, recovery, fastboot, unauthorized, etc.
-
-class ADBAutomationTool:
-    """
-    Comprehensive ADB automation tool with enhanced safety features.
-    
-    This class provides a safe, user-friendly interface to ADB and Fastboot
-    commands with built-in safety checks and error handling.
-    """
-    
-    def __init__(self):
-        self.device_info: Optional[DeviceInfo] = None
-        self.adb_path = self._find_executable('adb')
-        self.fastboot_path = self._find_executable('fastboot')
-        
-        self.critical_partitions = {
-            'boot', 'system', 'recovery', 'bootloader', 'radio',
-            'vendor', 'userdata', 'cache', 'misc', 'persist', 'vbmeta'
-        }
-
-    def _find_executable(self, name: str) -> str:
-        """
-        Locate an executable in system PATH or common SDK locations.
-        """
-        # 1. Check if it's in the system PATH
-        try:
-            result = subprocess.run(['which' if platform.system() != 'Windows' else 'where', name], capture_output=True, text=True, check=False)
-            if result.returncode == 0:
-                return result.stdout.strip().split('\n')[0]
-        except FileNotFoundError:
-            pass
-            
-        # 2. Check common manual installation paths
-        home = Path.home()
-        common_paths = [
-            home / 'Android/Sdk/platform-tools',
-            home / 'Library/Android/sdk/platform-tools',  # macOS
-            Path('/usr/local/bin'),
-            Path('/usr/bin'),
-            Path('/opt/android-sdk/platform-tools'),  # Arch Linux Path
-            home / 'AppData/Local/Android/sdk/platform-tools' # Windows
-        ]
-        
-        for path in common_paths:
-            executable_path = path / (name + ('.exe' if platform.system() == 'Windows' else ''))
-            if executable_path.is_file():
-                return str(executable_path)
-        
-        raise FileNotFoundError(
-            f"{name.upper()} not found. Please install Android SDK Platform-Tools and ensure it's in your system's PATH."
-        )
-
-    def run_command(self, command: List[str], timeout: int = 60) -> Tuple[bool, str, str]:
-        """
-        Execute a command with proper error handling and colored output.
-        """
-        try:
-            print(f"{Colors.BLUE}Executing: {' '.join(command)}{Colors.ENDC}")
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False
-            )
-            success = result.returncode == 0
-            if not success:
-                 print(f"{Colors.RED}Error: {result.stderr.strip()}{Colors.ENDC}")
-            return success, result.stdout.strip(), result.stderr.strip()
-            
-        except subprocess.TimeoutExpired:
-            return False, "", f"Command timed out after {timeout} seconds."
-        except Exception as e:
-            return False, "", f"Command failed with an unexpected error: {e}"
-
-    def get_device_info(self) -> Optional[DeviceInfo]:
-        """
-        Retrieve comprehensive information for a selected device.
-        """
-        success, stdout, _ = self.run_command([self.adb_path, 'devices'])
-        if not success:
-            return None
-
-        lines = stdout.strip().split('\n')[1:]
-        connected_devices = [tuple(line.split('\t')) for line in lines if '\t' in line]
-
-        if not connected_devices:
-            self.device_info = None
-            return None
-
-        if len(connected_devices) > 1:
-            print(f"\n{Colors.YELLOW}Multiple devices connected:{Colors.ENDC}")
-            for i, (serial, state) in enumerate(connected_devices):
-                print(f"{i + 1}. {serial} ({state})")
-            
-            while True:
-                try:
-                    choice = int(input("Select device (number): ")) - 1
-                    if 0 <= choice < len(connected_devices):
-                        serial, state = connected_devices[choice]
-                        break
-                    else:
-                        print(f"{Colors.RED}Invalid selection.{Colors.ENDC}")
-                except ValueError:
-                    print(f"{Colors.RED}Please enter a number.{Colors.ENDC}")
-        else:
-            serial, state = connected_devices[0]
-
-        if state == 'unauthorized':
-            print(f"\n{Colors.BOLD}{Colors.RED}Device {serial} is unauthorized.{Colors.ENDC}")
-            print(f"{Colors.YELLOW}Please check your device screen and allow USB debugging.{Colors.ENDC}")
-            self.device_info = DeviceInfo(serial, "Unknown", "Unknown", "Unknown", "Unknown", state)
-            return self.device_info
-
-        props = {}
-        prop_commands = {
-            'model': 'ro.product.model',
-            'android_version': 'ro.build.version.release',
-            'sdk_version': 'ro.build.version.sdk',
-            'bootloader_version': 'ro.bootloader'
-        }
-        
-        for key, prop in prop_commands.items():
-            _, stdout, _ = self.run_command([self.adb_path, '-s', serial, 'shell', 'getprop', prop])
-            props[key] = stdout or "Unknown"
-
-        self.device_info = DeviceInfo(
-            serial=serial,
-            model=props['model'],
-            android_version=props['android_version'],
-            sdk_version=props['sdk_version'],
-            bootloader_version=props['bootloader_version'],
-            state=state
-        )
-        return self.device_info
-
-    def display_device_info(self):
-        """Display current device information in a formatted way."""
-        clear_screen()
-        if not self.device_info:
-            print(f"{Colors.YELLOW}No device information available. Please connect a device.{Colors.ENDC}")
-            return
-        
-        print("\n" + "="*50)
-        print(f"{Colors.BOLD}{Colors.GREEN}CONNECTED DEVICE INFORMATION{Colors.ENDC}")
-        print("="*50)
-        print(f"{Colors.BOLD}Serial:{Colors.ENDC}           {self.device_info.serial}")
-        print(f"{Colors.BOLD}Model:{Colors.ENDC}            {self.device_info.model}")
-        print(f"{Colors.BOLD}Android Version:{Colors.ENDC}  {self.device_info.android_version}")
-        print(f"{Colors.BOLD}SDK Version:{Colors.ENDC}      {self.device_info.sdk_version}")
-        print(f"{Colors.BOLD}Bootloader:{Colors.ENDC}       {self.device_info.bootloader_version}")
-        print(f"{Colors.BOLD}State:{Colors.ENDC}            {self.device_info.state}")
-        print("="*50 + "\n")
-        input(f"{Colors.YELLOW}Press Enter to return to the menu...{Colors.ENDC}")
-
-    def confirm_action(self, message: str) -> bool:
-        """Get user confirmation for potentially dangerous actions."""
-        prompt = f"\n{Colors.BOLD}{Colors.YELLOW}CONFIRMATION:{Colors.ENDC} {message} (y/N): "
-        while True:
-            response = input(prompt).strip().lower()
-            if response in ['y', 'yes']:
-                return True
-            elif response in ['n', 'no', '']:
-                print(f"{Colors.RED}Operation cancelled.{Colors.ENDC}")
-                return False
-            else:
-                print(f"{Colors.RED}Invalid input. Please enter 'y' or 'n'.{Colors.ENDC}")
-
-    # --- File Operations ---
-    def file_operations_menu(self):
-        """Menu for file transfer and app management operations."""
-        menu_options = {
-            '1': ('Push File to Device', self.push_file),
-            '2': ('Pull File from Device', self.pull_file),
-            '3': ('Batch Push Directory to Device', self.batch_push),
-            '4': ('Batch Pull Directory from Device', self.batch_pull),
-            '5': ('Install APK', self.install_apk),
-            '6': ('Uninstall Package', self.uninstall_package),
-            '7': ('List Installed Packages', self.list_packages),
-            '8': ('List Device Directory', self.list_device_directory),
-            '9': ('Back to Main Menu', None)
-        }
-        self._run_menu("📁 FILE OPERATIONS", menu_options)
-
-    def push_file(self):
-        """Push a single file to the device."""
-        local_path = input("Enter local file path: ").strip()
-        if not Path(local_path).exists():
-            print(f"{Colors.RED}Local file does not exist.{Colors.ENDC}")
-            return
-        remote_path = input("Enter device destination path (e.g., /sdcard/): ").strip()
-        self._execute_file_transfer('push', local_path, remote_path)
-    
-    def pull_file(self):
-        """Pull a single file from the device."""
-        remote_path = input("Enter device file path: ").strip()
-        local_path = input("Enter local destination path: ").strip()
-        self._execute_file_transfer('pull', remote_path, local_path)
-
-    def batch_push(self):
-        """Push all files from a local directory to the device."""
-        local_dir = input("Enter local directory path: ").strip()
-        if not Path(local_dir).is_dir():
-            print(f"{Colors.RED}Local directory does not exist.{Colors.ENDC}")
-            return
-        remote_dir = input("Enter device destination directory (e.g., /sdcard/): ").strip()
-        
-        for item in Path(local_dir).iterdir():
-            if item.is_file():
-                self._execute_file_transfer('push', str(item), remote_dir)
-        print(f"\n{Colors.GREEN}Batch push complete.{Colors.ENDC}")
-
-    def batch_pull(self):
-        """Pull all files from a device directory to the local machine."""
-        remote_dir = input("Enter device directory to pull from (e.g., /sdcard/Download/): ").strip()
-        local_dir = input("Enter local destination directory: ").strip()
-        Path(local_dir).mkdir(exist_ok=True)
-        
-        success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'ls', '-p', remote_dir])
-        if success:
-            for filename in stdout.split():
-                if not filename.endswith('/'): 
-                    remote_file_path = f"{remote_dir.rstrip('/')}/{filename}"
-                    self._execute_file_transfer('pull', remote_file_path, local_dir)
-            print(f"\n{Colors.GREEN}Batch pull complete.{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Failed to list directory contents for batch pull.{Colors.ENDC}")
-
-    def _execute_file_transfer(self, direction: str, source: str, dest: str):
-        """Helper for executing push/pull commands."""
-        command = [self.adb_path, '-s', self.device_info.serial, direction, source, dest]
-        success, stdout, _ = self.run_command(command, timeout=300)
-        if success:
-            print(f"{Colors.GREEN}Successfully {direction}ed '{Path(source).name}'.{Colors.ENDC}")
-            print(stdout)
-        else:
-            print(f"{Colors.RED}{direction.capitalize()} failed for '{Path(source).name}'.{Colors.ENDC}")
-
-    def install_apk(self):
-        """Install an APK file onto the device."""
-        apk_path = input("Enter APK file path: ").strip()
-        if not Path(apk_path).is_file() or not apk_path.lower().endswith('.apk'):
-            print(f"{Colors.RED}Invalid APK file path.{Colors.ENDC}")
-            return
-            
-        command = [self.adb_path, '-s', self.device_info.serial, 'install', '-r', apk_path]
-        success, stdout, _ = self.run_command(command, timeout=300)
-        if success and ('Success' in stdout or 'success' in stdout):
-            print(f"{Colors.GREEN}Successfully installed {Path(apk_path).name}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Installation failed.{Colors.ENDC}")
-
-    def uninstall_package(self):
-        """Uninstall a package from the device."""
-        package_name = input("Enter package name (e.g., com.example.app): ").strip()
-        if not package_name: return
-        
-        command = [self.adb_path, '-s', self.device_info.serial, 'uninstall', package_name]
-        success, stdout, _ = self.run_command(command)
-        if success and 'Success' in stdout:
-            print(f"{Colors.GREEN}Successfully uninstalled {package_name}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Uninstall failed. The package may not exist.{Colors.ENDC}")
-    
-    def list_packages(self):
-        """List all installed packages on the device."""
-        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'pm', 'list', 'packages']
-        success, stdout, _ = self.run_command(command)
-        if success:
-            packages = sorted([p.replace('package:', '') for p in stdout.split()])
-            print(f"\n{Colors.GREEN}Found {len(packages)} packages:{Colors.ENDC}")
-            print("-" * 60)
-            for pkg in packages:
-                print(pkg)
-            print("-" * 60)
-        else:
-            print(f"{Colors.RED}Failed to list packages.{Colors.ENDC}")
-
-    def list_device_directory(self):
-        """List contents of a directory on the device."""
-        directory = input("Enter device directory path (default: /sdcard/): ").strip() or "/sdcard/"
-        command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'ls', '-la', directory]
-        success, stdout, _ = self.run_command(command)
-        if success:
-            print(f"\n{Colors.GREEN}Contents of {directory}:{Colors.ENDC}")
-            print("-" * 60)
-            print(stdout)
-            print("-" * 60)
-        else:
-            print(f"{Colors.RED}Failed to list directory contents.{Colors.ENDC}")
-
-
-    # --- Fastboot Operations ---
-    def fastboot_menu(self):
-        """Menu for dangerous Fastboot operations."""
-        clear_screen()
-        print(f"\n{Colors.BOLD}{Colors.RED}{'='*60}")
-        print("         ⚠️  FASTBOOT MODE - EXTREME CAUTION REQUIRED ⚠️")
-        print(f"{'='*60}{Colors.ENDC}")
-        print(f"{Colors.YELLOW}Fastboot operations modify critical system partitions.")
-        print("Incorrect usage can permanently brick your device!")
-        print("Ensure you have the correct files for your specific device model.{Colors.ENDC}")
-        
-        if not self.confirm_action("Do you understand the risks and want to continue?"):
-            return
-            
-        menu_options = {
-            '1': ('Flash Partition', self.fastboot_flash),
-            '2': ('Erase Partition', self.fastboot_erase),
-            '3': ('Unlock Bootloader (Erases Data)', self.fastboot_unlock),
-            '4': ('Lock Bootloader', self.fastboot_lock),
-            '5': ('Set Active Slot (A/B Devices)', self.fastboot_set_active_slot),
-            '6': ('Get All Device Variables (getvar all)', self.fastboot_getvar_all),
-            '7': ('Reboot from Fastboot', self.fastboot_reboot),
-            '8': ('Check Fastboot Devices', self.fastboot_devices),
-            '9': ('Back to Main Menu', None)
-        }
-        self._run_menu("🔥 FASTBOOT OPERATIONS", menu_options)
-
-    def fastboot_flash(self):
-        """Flash a partition with an image file, with extensive safety checks."""
-        partition = input("Enter partition name (e.g., boot, recovery): ").strip().lower()
-        if not partition: return
-        
-        image_path = input("Enter image file path: ").strip()
-        if not Path(image_path).is_file():
-            print(f"{Colors.RED}Image file does not exist.{Colors.ENDC}")
-            return
-            
-        print(f"\n{Colors.BOLD}{Colors.RED}{'⚠️'*20}\nCRITICAL WARNING: PARTITION FLASHING\n{'⚠️'*20}{Colors.ENDC}")
-        print(f"You are about to flash the file '{Path(image_path).name}' to the '{partition}' partition.")
-        
-        if partition in self.critical_partitions:
-            print(f"{Colors.YELLOW}'{partition}' is a critical partition. A wrong image WILL brick your device.{Colors.ENDC}")
-
-        if not self.confirm_action(f"Are you ABSOLUTELY SURE you want to flash '{partition}'?"):
-            return
-            
-        if not self.confirm_action("FINAL CONFIRMATION. There is no going back. Proceed?"):
-            return
-
-        command = [self.fastboot_path, 'flash', partition, image_path]
-        success, stdout, stderr = self.run_command(command, timeout=600)
-        output = stdout + stderr
-        if success:
-            print(f"{Colors.GREEN}Flash successful!\n{output}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Flash failed!\n{output}{Colors.ENDC}")
-
-    def fastboot_erase(self):
-        """Erase a partition, with safety checks."""
-        partition = input("Enter partition name to ERASE (e.g., userdata, cache): ").strip().lower()
-        if not partition: return
-
-        print(f"\n{Colors.BOLD}{Colors.RED}{'⚠️'*20}\nCRITICAL WARNING: PARTITION ERASE\n{'⚠️'*20}{Colors.ENDC}")
-        print(f"You are about to PERMANENTLY ERASE the '{partition}' partition. This is IRREVERSIBLE.")
-
-        if partition in self.critical_partitions and partition not in ['userdata', 'cache']:
-            print(f"{Colors.YELLOW}Erasing the critical partition '{partition}' will likely brick your device.{Colors.ENDC}")
-
-        if not self.confirm_action(f"Are you sure you want to erase '{partition}'?"):
-            return
-
-        command = [self.fastboot_path, 'erase', partition]
-        success, stdout, stderr = self.run_command(command)
-        output = stdout + stderr
-        if success:
-            print(f"{Colors.GREEN}Erase successful!\n{output}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Erase failed!\n{output}{Colors.ENDC}")
-
-    def fastboot_unlock(self):
-        """Unlock the device bootloader."""
-        print(f"\n{Colors.BOLD}{Colors.RED}Unlocking the bootloader WILL WIPE ALL DATA on your device.{Colors.ENDC}")
-        if not self.confirm_action("Do you want to proceed with unlocking?"):
-            return
-        
-        command = [self.fastboot_path, 'flashing', 'unlock']
-        success, stdout, stderr = self.run_command(command)
-        output = stdout + stderr
-        if success:
-            print(f"{Colors.GREEN}Unlock command sent. Please check your device screen to confirm.{Colors.ENDC}\n{output}")
-        else:
-            print(f"{Colors.RED}Unlock command failed. Your device might use a different command (e.g., 'fastboot oem unlock').{Colors.ENDC}\n{output}")
-
-    def fastboot_lock(self):
-        """Lock the device bootloader."""
-        print(f"\n{Colors.BOLD}{Colors.YELLOW}Locking the bootloader is for returning to a factory state.")
-        print(f"{Colors.RED}If you have custom software installed, this might BRICK your device.{Colors.ENDC}")
-        if not self.confirm_action("Do you want to proceed with locking?"):
-            return
-
-        command = [self.fastboot_path, 'flashing', 'lock']
-        success, stdout, stderr = self.run_command(command)
-        output = stdout + stderr
-        if success:
-            print(f"{Colors.GREEN}Lock command sent. Please check your device screen.{Colors.ENDC}\n{output}")
-        else:
-            print(f"{Colors.RED}Lock command failed.{Colors.ENDC}\n{output}")
-
-    def fastboot_set_active_slot(self):
-        """Set the active boot slot on A/B devices."""
-        slot = input("Enter slot to set as active ('a' or 'b'): ").strip().lower()
-        if slot not in ['a', 'b']:
-            print(f"{Colors.RED}Invalid slot. Please enter 'a' or 'b'.{Colors.ENDC}")
-            return
-        
-        if not self.confirm_action(f"Are you sure you want to set the active slot to '{slot}'?"):
-            return
-
-        command = [self.fastboot_path, f'--set-active={slot}']
-        success, stdout, stderr = self.run_command(command)
-        output = stdout + stderr
-        if success:
-            print(f"{Colors.GREEN}Successfully set active slot to '{slot}'.\n{output}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Failed to set active slot.\n{output}{Colors.ENDC}")
-
-    def fastboot_getvar_all(self):
-        """Get all bootloader variables from the device."""
-        print(f"{Colors.YELLOW}Fetching all bootloader variables...{Colors.ENDC}")
-        command = [self.fastboot_path, 'getvar', 'all']
-        success, stdout, stderr = self.run_command(command, timeout=120)
-        
-        # 'getvar all' command weirdly prints its output to stderr.
-        output = stderr if not stdout else stdout + "\n" + stderr
-        
-        if success or output:
-            print(f"\n{Colors.GREEN}Device Variables:{Colors.ENDC}")
-            print("-" * 60)
-            print(output)
-            print("-" * 60)
-        else:
-            print(f"{Colors.RED}Failed to get device variables.{Colors.ENDC}")
-
-    def fastboot_reboot(self):
-        """Reboot the device from Fastboot mode."""
-        reboot_options = {
-            '1': ('Reboot to System', [self.fastboot_path, 'reboot']),
-            '2': ('Reboot to Bootloader', [self.fastboot_path, 'reboot-bootloader']),
-            '3': ('Reboot to Recovery', [self.fastboot_path, 'reboot', 'recovery']),
-            '4': ('Cancel', None)
-        }
-        
-        clear_screen()
-        print(f"\n{Colors.BOLD}{Colors.GREEN}Fastboot Reboot Options{Colors.ENDC}")
-        for key, (desc, _) in reboot_options.items():
-            print(f"{key}. {desc}")
-        
-        choice = input("\nSelect option: ").strip()
-        if choice in reboot_options and reboot_options[choice][1]:
-            self.run_command(reboot_options[choice][1])
-            print(f"{Colors.GREEN}Reboot command sent.{Colors.ENDC}")
-
-    def fastboot_devices(self):
-        """List devices currently in Fastboot mode."""
-        success, stdout, _ = self.run_command([self.fastboot_path, 'devices'])
-        if success:
-            print(f"\n{Colors.GREEN}Fastboot devices:{Colors.ENDC}")
-            print("-" * 30)
-            if stdout:
-                print(stdout)
-            else:
-                print("No devices in fastboot mode found.")
-            print("-" * 30)
-
-    # --- System Operations ---
-    def system_operations_menu(self):
-        menu_options = {
-            '1': ('Reboot Device', self.reboot_device),
-            '2': ('Reboot to Recovery', lambda: self.reboot_device('recovery')),
-            '3': ('Reboot to Bootloader', lambda: self.reboot_device('bootloader')),
-            '4': ('Take Screenshot', self.take_screenshot),
-            '5': ('Screen Recording', self.screen_recording),
-            '6': ('View Device Logs (Logcat)', self.logcat),
-            '7': ('Interactive Shell Access', self.shell_access),
-            '8': ('Get Battery Info', self.get_battery_info),
-            '9': ('Get Device IP Address', self.get_device_ip),
-            '10': ('Toggle Wi-Fi', self.toggle_wifi),
-            '11': ('Back to Main Menu', None)
-        }
-        self._run_menu("⚙️ SYSTEM OPERATIONS", menu_options)
-
-    def reboot_device(self, mode: str = ''):
-        """Reboot the device, with optional mode (recovery, bootloader)."""
-        action = mode or 'system'
-        if not self.confirm_action(f"Are you sure you want to reboot to '{action}'?"):
-            return
-        command = [self.adb_path, '-s', self.device_info.serial, 'reboot', mode]
-        success, _, _ = self.run_command(command)
-        if success:
-            print(f"{Colors.GREEN}Reboot command sent successfully.{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Reboot command failed.{Colors.ENDC}")
-
-    def take_screenshot(self):
-        """Take a screenshot and pull it to the local machine."""
-        timestamp = int(time.time())
-        filename = f"screenshot_{timestamp}.png"
-        device_path = f"/sdcard/{filename}"
-        local_dest = Path.cwd()
-        
-        success, _, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'screencap', device_path])
-        if success:
-            print(f"{Colors.YELLOW}Screenshot taken. Pulling to {local_dest}...{Colors.ENDC}")
-            self._execute_file_transfer('pull', device_path, str(local_dest))
-            self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', device_path])
-        else:
-            print(f"{Colors.RED}Failed to take screenshot on device.{Colors.ENDC}")
-    
-    def screen_recording(self):
-        """Record the device screen."""
-        try:
-            duration_str = input("Enter recording duration in seconds (1-180, default 30): ").strip()
-            duration = int(duration_str) if duration_str else 30
-            if not 1 <= duration <= 180: raise ValueError
-        except ValueError:
-            print(f"{Colors.RED}Invalid duration. Please enter a number between 1 and 180.{Colors.ENDC}")
-            return
-            
-        timestamp = int(time.time())
-        filename = f"screenrecord_{timestamp}.mp4"
-        device_path = f"/sdcard/{filename}"
-        local_dest = Path.cwd()
-        
-        print(f"{Colors.YELLOW}Starting {duration}s screen recording... Press Ctrl+C to stop early.{Colors.ENDC}")
-        
-        record_command = [
-            self.adb_path, '-s', self.device_info.serial, 'shell',
-            'screenrecord', f'--time-limit={duration}', device_path
-        ]
-
-        try:
-            # This is a blocking call, it will wait for the recording to finish or timeout.
-            self.run_command(record_command, timeout=duration + 15)
-        except KeyboardInterrupt:
-            print(f"\n{Colors.YELLOW}Recording stopped by user.{Colors.ENDC}")
-            # The recording process on the device needs to be killed manually on Ctrl+C.
-            self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'killall', 'screenrecord'])
-        finally:
-            print(f"{Colors.YELLOW}Pulling video file to {local_dest}...{Colors.ENDC}")
-            self._execute_file_transfer('pull', device_path, str(local_dest))
-            self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'rm', device_path])
-
-    def logcat(self):
-        """View device logs in real-time."""
-        print(f"\n{Colors.YELLOW}Starting real-time log monitoring... Press Ctrl+C to stop.{Colors.ENDC}")
-        logcat_process = None
-        try:
-            command = [self.adb_path, '-s', self.device_info.serial, 'logcat']
-            logcat_process = subprocess.Popen(command)
-            logcat_process.wait()
-        except KeyboardInterrupt:
-            print(f"\n{Colors.GREEN}Logcat stopped.{Colors.ENDC}")
-        finally:
-            if logcat_process and logcat_process.poll() is None:
-                logcat_process.terminate()
-
-    def shell_access(self):
-        """Provide an interactive shell to the device."""
-        print(f"\n{Colors.YELLOW}Starting interactive shell... Type 'exit' or press Ctrl+D to quit.{Colors.ENDC}")
-        print("-" * 50)
-        subprocess.run([self.adb_path, '-s', self.device_info.serial, 'shell'])
-        print("-" * 50)
-        print(f"{Colors.GREEN}Shell session ended.{Colors.ENDC}")
-
-    def get_battery_info(self):
-        """Displays detailed battery information."""
-        success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'dumpsys', 'battery'])
-        if success:
-            print(f"\n{Colors.GREEN}Battery Information:{Colors.ENDC}")
-            print("-" * 60)
-            print(stdout)
-            print("-" * 60)
-        else:
-            print(f"{Colors.RED}Failed to get battery information.{Colors.ENDC}")
-
-    def get_device_ip(self):
-        """Gets and displays the device's Wi-Fi IP address."""
-        success, stdout, _ = self.run_command([self.adb_path, '-s', self.device_info.serial, 'shell', 'ip', 'addr', 'show', 'wlan0'])
-        if success and 'inet' in stdout:
-            ip_line = [line for line in stdout.split('\n') if 'inet ' in line][0]
-            ip_address = ip_line.strip().split()[1].split('/')[0]
-            print(f"\n{Colors.GREEN}Device Wi-Fi IP Address: {Colors.BOLD}{ip_address}{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Could not determine Wi-Fi IP address. Is the device connected to Wi-Fi?{Colors.ENDC}")
-
-    def toggle_wifi(self):
-        """Enables or disables Wi-Fi on the device."""
-        choice = input("Do you want to [1] Enable or [2] Disable Wi-Fi? Enter 1 or 2: ").strip()
-        if choice == '1':
-            command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'svc', 'wifi', 'enable']
-            action = "Enabling"
-            final_state = "enabled"
-        elif choice == '2':
-            command = [self.adb_path, '-s', self.device_info.serial, 'shell', 'svc', 'wifi', 'disable']
-            action = "Disabling"
-            final_state = "disabled"
-        else:
-            print(f"{Colors.RED}Invalid choice.{Colors.ENDC}")
-            return
-        
-        print(f"{Colors.YELLOW}{action} Wi-Fi...{Colors.ENDC}")
-        success, _, _ = self.run_command(command)
-        if success:
-            print(f"{Colors.GREEN}Wi-Fi has been {final_state}.{Colors.ENDC}")
-        else:
-            print(f"{Colors.RED}Failed to change Wi-Fi state.{Colors.ENDC}")
-
-    # --- Main Menu Logic ---
-    
-    def _run_menu(self, title: str, options: Dict[str, Tuple[str, callable]]):
-        """Generic function to display and handle a menu."""
-        while True:
-            clear_screen()
-            print(f"\n{Colors.BOLD}{Colors.GREEN}{title}{Colors.ENDC}")
-            print("-" * 40)
-            for key, (desc, _) in options.items():
-                print(f"{Colors.YELLOW}{key}{Colors.ENDC}. {desc}")
-            print("-" * 40)
-            
-            choice = input("Select option: ").strip()
-            
-            if choice in options:
-                desc, func = options[choice]
-                if func is None: # Exit option
-                    break
-                clear_screen()
-                print(f"{Colors.HEADER}--- {desc} ---{Colors.ENDC}")
-                func()
-                input(f"\n\n{Colors.YELLOW}Press Enter to return to the menu...{Colors.ENDC}")
-            else:
-                print(f"{Colors.RED}Invalid choice. Please try again.{Colors.ENDC}")
-                time.sleep(1)
-
-    def main_menu(self):
-        """The main application menu."""
-        while True:
-            clear_screen()
-            print("\n" + "="*60)
-            print(f"{Colors.BOLD}{Colors.BLUE}PYDROIDB MAIN MENU{Colors.ENDC}")
-            print("="*60)
-
-            if not self.device_info:
-                print(f"\n{Colors.YELLOW}Searching for devices...{Colors.ENDC}")
-                self.get_device_info()
-
-            if self.device_info:
-                state_color = Colors.GREEN if self.device_info.state == 'device' else Colors.RED
-                print(f"Connected Device: {Colors.BOLD}{self.device_info.model}{Colors.ENDC} ({state_color}{self.device_info.state}{Colors.ENDC})")
-            else:
-                print(f"\n{Colors.BOLD}{Colors.RED}⚠️ No device connected or authorized.{Colors.ENDC}")
-                print(f"{Colors.YELLOW}Please connect an Android device with USB debugging enabled.{Colors.ENDC}")
-            
-            print("="*60)
-
-            menu_options = {
-                '1': 'Device Information',
-                '2': 'File Operations',
-                '3': 'System Operations',
-                '4': 'Fastboot Operations (DANGEROUS)',
-                '5': 'Refresh Device List',
-                '6': 'Exit'
-            }
-
-            for key, desc in menu_options.items():
-                    print(f"{Colors.YELLOW}{key}{Colors.ENDC}. {desc}")
-
-            choice = input("\nSelect option: ").strip()
-
-            # Helper function for state check to avoid repetition
-            def check_device_state():
-                if not self.device_info or self.device_info.state != 'device':
-                    print(f"\n{Colors.RED}This action requires the device to be in normal 'device' mode.{Colors.ENDC}")
-                    if self.device_info:
-                        print(f"{Colors.YELLOW}Current state is '{self.device_info.state}'. Please reboot to the main system.{Colors.ENDC}")
-                    time.sleep(3)
-                    return False
-                return True
-
-            if choice == '1':
-                if self.device_info: self.display_device_info()
-            elif choice == '2':
-                if check_device_state(): self.file_operations_menu()
-            elif choice == '3':
-                if check_device_state(): self.system_operations_menu()
-            elif choice == '4':
-                self.fastboot_menu()
-            elif choice == '5':
-                self.device_info = None # Force a refresh on the next loop
-            elif choice == '6':
-                print(f"{Colors.BOLD}{Colors.BLUE}Goodbye!{Colors.ENDC}")
+#!/usr/bin/env bash
+
+VERSION="0.0.1"
+BLUE='\033[94m'
+GREEN='\033[92m'
+RED='\033[91m'
+BOLD='\033[1m'
+ENDC='\033[0m'
+
+DEFAULT_TIMEOUT=60
+FILE_TIMEOUT=300
+BACKUP_TIMEOUT=3600
+FASTBOOT_TIMEOUT=600
+
+clear_screen() {
+    clear
+}
+
+display_info() {
+    echo -e "${BOLD}${BLUE}Pydroidb: ADB and Fastboot Automation Tool v${VERSION}${ENDC}"
+    echo -e "${GREEN}Author: 0xbv1 | 0xb0rn3${ENDC}"
+    echo -e "${GREEN}GitHub: https://github.com/0xb0rn3/pydroidb${ENDC}"
+    echo -e "${GREEN}Platform: $(uname -s) $(uname -m)${ENDC}"
+    echo -e "${RED}${BOLD}============================[ SAFETY WARNING ]============================${ENDC}"
+    echo -e "${RED}This tool modifies device firmware and can cause permanent damage if used incorrectly.${ENDC}"
+    echo -e "${RED}Always back up data and have official recovery images. USE AT YOUR OWN RISK.${ENDC}"
+    echo -e "${RED}${BOLD}=========================================================================${ENDC}"
+    read -p "Press Enter to continue..."
+}
+
+check_requirements() {
+    echo -e "${BLUE}Checking requirements...${ENDC}"
+    if ! command -v adb &>/dev/null || ! command -v fastboot &>/dev/null; then
+        echo -e "${BLUE}Installing Android SDK Platform-Tools...${ENDC}"
+        if [[ -f /etc/debian_version ]]; then
+            sudo apt update && sudo apt install -y android-tools-adb android-tools-fastboot
+        elif [[ -f /etc/redhat-release ]]; then
+            sudo dnf install -y android-tools
+        elif [[ -f /etc/arch-release ]]; then
+            sudo pacman -S --noconfirm android-tools
+        elif [[ -f /etc/SuSE-release ]]; then
+            sudo zypper install -y android-tools
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            if command -v brew &>/dev/null; then
+                brew install android-platform-tools
+            else
+                echo -e "${RED}Homebrew not found. Install from https://brew.sh${ENDC}"
+                exit 1
+            fi
+        else
+            echo -e "${RED}Unsupported OS. Install ADB/Fastboot from https://developer.android.com/studio/releases/platform-tools${ENDC}"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}Requirements satisfied, skipping installation.${ENDC}"
+    fi
+    ADB=$(command -v adb)
+    FASTBOOT=$(command -v fastboot)
+    ADB_VERSION=$($ADB version | head -1)
+    FASTBOOT_VERSION=$($FASTBOOT --version | head -1)
+    echo -e "${BLUE}ADB: $ADB_VERSION${ENDC}"
+    echo -e "${BLUE}Fastboot: $FASTBOOT_VERSION${ENDC}"
+    $ADB start-server &>/dev/null && echo -e "${GREEN}ADB server started.${ENDC}"
+}
+
+get_device_info() {
+    echo -e "${BLUE}Scanning devices...${ENDC}"
+    DEVICES=$($ADB devices | tail -n +2 | awk '{print $1 "\t" $2}')
+    if [[ -z "$DEVICES" ]]; then
+        echo -e "${RED}No devices detected. Ensure USB debugging is enabled and device is authorized.${ENDC}"
+        DEVICE_INFO=""
+        return 1
+    fi
+    DEVICE_COUNT=$(echo "$DEVICES" | wc -l)
+    if [[ $DEVICE_COUNT -gt 1 ]]; then
+        echo -e "${GREEN}Multiple devices connected:${ENDC}"
+        echo "$DEVICES" | nl -w 2 -s '. '
+        while true; do
+            read -p "Select device (number): " CHOICE
+            if [[ $CHOICE =~ ^[0-9]+$ ]] && [[ $CHOICE -ge 1 ]] && [[ $CHOICE -le $DEVICE_COUNT ]]; then
+                SERIAL=$(echo "$DEVICES" | sed -n "${CHOICE}p" | awk '{print $1}')
+                STATE=$(echo "$DEVICES" | sed -n "${CHOICE}p" | awk '{print $2}')
                 break
-            else:
-                print(f"{Colors.RED}Invalid choice. Please try again.{Colors.ENDC}")
-                time.sleep(1)
+            else
+                echo -e "${RED}Invalid selection.${ENDC}"
+            fi
+        done
+    else
+        SERIAL=$(echo "$DEVICES" | awk '{print $1}')
+        STATE=$(echo "$DEVICES" | awk '{print $2}')
+    fi
+    if [[ "$STATE" == "unauthorized" ]]; then
+        echo -e "${RED}${BOLD}Device $SERIAL unauthorized. Authorize on device screen.${ENDC}"
+        DEVICE_INFO="serial=$SERIAL model=Unknown android_version=Unknown sdk_version=Unknown bootloader_version=Unknown kernel_version=Unknown manufacturer=Unknown architecture=Unknown state=$STATE"
+        return 0
+    fi
+    MODEL=$($ADB -s $SERIAL shell getprop ro.product.model | tr -d '\r')
+    ANDROID_VERSION=$($ADB -s $SERIAL shell getprop ro.build.version.release | tr -d '\r')
+    SDK_VERSION=$($ADB -s $SERIAL shell getprop ro.build.version.sdk | tr -d '\r')
+    BOOTLOADER_VERSION=$($ADB -s $SERIAL shell getprop ro.bootloader | tr -d '\r')
+    KERNEL_VERSION=$($ADB -s $SERIAL shell cat /proc/version | tr -d '\r')
+    MANUFACTURER=$($ADB -s $SERIAL shell getprop ro.product.manufacturer | tr -d '\r')
+    ARCHITECTURE=$($ADB -s $SERIAL shell getprop ro.product.cpu.abi | tr -d '\r')
+    DEVICE_INFO="serial=$SERIAL model=$MODEL android_version=$ANDROID_VERSION sdk_version=$SDK_VERSION bootloader_version=$BOOTLOADER_VERSION kernel_version=$KERNEL_VERSION manufacturer=$MANUFACTURER architecture=$ARCHITECTURE state=$STATE"
+    echo -e "${GREEN}Device info gathered.${ENDC}"
+}
 
+display_device_info() {
+    clear_screen
+    if [[ -z "$DEVICE_INFO" ]]; then
+        echo -e "${RED}No device info available. Connect a device.${ENDC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    echo -e "\n${BOLD}${GREEN}CONNECTED DEVICE INFORMATION${ENDC}"
+    echo "=================================================="
+    echo -e "${BOLD}Serial:${ENDC}           $(echo $DEVICE_INFO | grep -oP 'serial=\K[^ ]+')"
+    echo -e "${BOLD}Manufacturer:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'manufacturer=\K[^ ]+')"
+    echo -e "${BOLD}Model:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+')"
+    echo -e "${BOLD}Android Version:${ENDC}  $(echo $DEVICE_INFO | grep -oP 'android_version=\K[^ ]+')"
+    echo -e "${BOLD}SDK Version:${ENDC}      $(echo $DEVICE_INFO | grep -oP 'sdk_version=\K[^ ]+')"
+    echo -e "${BOLD}Architecture:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'architecture=\K[^ ]+')"
+    echo -e "${BOLD}Bootloader:${ENDC}       $(echo $DEVICE_INFO | grep -oP 'bootloader_version=\K[^ ]+')"
+    echo -e "${BOLD}Kernel:${ENDC}           $(echo $DEVICE_INFO | grep -oP 'kernel_version=\K.+')"
+    echo -e "${BOLD}State:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')"
+    echo "=================================================="
+    read -p "Press Enter to return..."
+}
 
-def main():
-    """Main application entry point."""
-    try:
-        clear_screen()
-        display_banner()
-        tool = ADBAutomationTool()
-        tool.main_menu()
-    
-    except FileNotFoundError as e:
-        print(f"\n{Colors.BOLD}{Colors.RED}FATAL ERROR: {e}{Colors.ENDC}")
-        print("\nPlease install Android SDK Platform Tools from:")
-        print("https://developer.android.com/studio/releases/platform-tools")
-        print("Then, add the extracted directory to your system's PATH variable.")
-    
-    except KeyboardInterrupt:
-        print(f"\n\n{Colors.YELLOW}Tool interrupted by user. Goodbye!{Colors.ENDC}")
-    
-    except Exception as e:
-        print(f"\n{Colors.BOLD}{Colors.RED}An unexpected error occurred: {e}{Colors.ENDC}")
-        print("Please report this issue on GitHub with the error details.")
+confirm_action() {
+    read -p "${BOLD}${GREEN}CONFIRMATION: $1 (y/N): ${ENDC}" RESPONSE
+    RESPONSE=$(echo "$RESPONSE" | tr '[:upper:]' '[:lower:]')
+    if [[ "$RESPONSE" == "y" || "$RESPONSE" == "yes" ]]; then
+        return 0
+    else
+        echo -e "${RED}Operation cancelled.${ENDC}"
+        return 1
+    fi
+}
 
-if __name__ == "__main__":
-    main()
+run_command() {
+    echo -e "${BLUE}Executing: $1${ENDC}"
+    OUTPUT=$(timeout $2 bash -c "$1" 2>&1)
+    STATUS=$?
+    if [[ $STATUS -eq 124 ]]; then
+        echo -e "${RED}Command timed out after $2 seconds${ENDC}"
+        return 124
+    elif [[ $STATUS -eq 0 ]]; then
+        [[ -n "$OUTPUT" ]] && echo -e "${GREEN}$OUTPUT${ENDC}"
+        return 0
+    else
+        echo -e "${RED}Error: $OUTPUT${ENDC}"
+        return $STATUS
+    fi
+}
+
+push_file() {
+    read -p "Local file path: " LOCAL_PATH
+    if [[ ! -f "$LOCAL_PATH" ]]; then
+        echo -e "${RED}File does not exist.${ENDC}"
+        return
+    fi
+    FILE_SIZE=$(stat -c%s "$LOCAL_PATH" 2>/dev/null || stat -f%z "$LOCAL_PATH" 2>/dev/null)
+    echo -e "${BLUE}File size: $(numfmt --to=iec-i --suffix=B $FILE_SIZE)${ENDC}"
+    read -p "Device destination path (e.g., /sdcard/): " REMOTE_PATH
+    if ! $ADB -s $SERIAL shell test -d "$(dirname "$REMOTE_PATH")" 2>/dev/null; then
+        echo -e "${RED}Destination directory does not exist on device.${ENDC}"
+        return
+    fi
+    run_command "$ADB -s $SERIAL push \"$LOCAL_PATH\" \"$REMOTE_PATH\"" $FILE_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}File pushed successfully.${ENDC}"
+}
+
+pull_file() {
+    read -p "Device file path: " REMOTE_PATH
+    if ! $ADB -s $SERIAL shell test -f "$REMOTE_PATH" 2>/dev/null; then
+        echo -e "${RED}File does not exist on device.${ENDC}"
+        return
+    fi
+    FILE_SIZE=$($ADB -s $SERIAL shell stat -c%s "$REMOTE_PATH" 2>/dev/null)
+    [[ -n "$FILE_SIZE" ]] && echo -e "${BLUE}File size: $(numfmt --to=iec-i --suffix=B $FILE_SIZE)${ENDC}"
+    read -p "Local destination path: " LOCAL_PATH
+    run_command "$ADB -s $SERIAL pull \"$REMOTE_PATH\" \"$LOCAL_PATH\"" $FILE_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}File pulled successfully.${ENDC}"
+}
+
+batch_push() {
+    read -p "Local directory path: " LOCAL_DIR
+    if [[ ! -d "$LOCAL_DIR" ]]; then
+        echo -e "${RED}Directory does not exist.${ENDC}"
+        return
+    fi
+    read -p "Device destination directory (e.g., /sdcard/): " REMOTE_DIR
+    if ! $ADB -s $SERIAL shell test -d "$REMOTE_DIR" 2>/dev/null; then
+        echo -e "${RED}Destination directory does not exist on device.${ENDC}"
+        return
+    fi
+    FILE_COUNT=$(find "$LOCAL_DIR" -type f | wc -l)
+    echo -e "${BLUE}Found $FILE_COUNT files to push${ENDC}"
+    confirm_action "Push $FILE_COUNT files?" || return
+    CURRENT=0
+    for FILE in "$LOCAL_DIR"/*; do
+        if [[ -f "$FILE" ]]; then
+            CURRENT=$((CURRENT + 1))
+            echo -e "${BLUE}[$CURRENT/$FILE_COUNT] Pushing $(basename "$FILE")...${ENDC}"
+            run_command "$ADB -s $SERIAL push \"$FILE\" \"$REMOTE_DIR\"" $FILE_TIMEOUT
+        fi
+    done
+    echo -e "${GREEN}Batch push complete: $CURRENT files processed.${ENDC}"
+}
+
+batch_pull() {
+    read -p "Device directory path (e.g., /sdcard/Download/): " REMOTE_DIR
+    if ! $ADB -s $SERIAL shell test -d "$REMOTE_DIR" 2>/dev/null; then
+        echo -e "${RED}Directory does not exist on device.${ENDC}"
+        return
+    fi
+    read -p "Local destination directory: " LOCAL_DIR
+    mkdir -p "$LOCAL_DIR"
+    FILES=$($ADB -s $SERIAL shell find "$REMOTE_DIR" -type f 2>/dev/null | tr -d '\r')
+    FILE_COUNT=$(echo "$FILES" | wc -l)
+    echo -e "${BLUE}Found $FILE_COUNT files to pull${ENDC}"
+    confirm_action "Pull $FILE_COUNT files?" || return
+    CURRENT=0
+    while IFS= read -r FILE; do
+        if [[ -n "$FILE" ]]; then
+            CURRENT=$((CURRENT + 1))
+            echo -e "${BLUE}[$CURRENT/$FILE_COUNT] Pulling $(basename "$FILE")...${ENDC}"
+            run_command "$ADB -s $SERIAL pull \"$FILE\" \"$LOCAL_DIR\"" $FILE_TIMEOUT
+        fi
+    done <<< "$FILES"
+    echo -e "${GREEN}Batch pull complete: $CURRENT files processed.${ENDC}"
+}
+
+install_apk() {
+    read -p "APK file path: " APK_PATH
+    if [[ ! -f "$APK_PATH" || ! "$APK_PATH" =~ \.apk$ ]]; then
+        echo -e "${RED}Invalid APK file.${ENDC}"
+        return
+    fi
+    FILE_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null)
+    echo -e "${BLUE}APK: $(basename "$APK_PATH") Size: $(numfmt --to=iec-i --suffix=B $FILE_SIZE)${ENDC}"
+    if command -v aapt &>/dev/null; then
+        PKG=$(aapt dump badging "$APK_PATH" 2>/dev/null | grep "package:" | sed "s/.*name='\([^']*\)'.*/\1/")
+        [[ -n "$PKG" ]] && echo -e "${BLUE}Package: $PKG${ENDC}"
+    fi
+    OUTPUT=$(run_command "$ADB -s $SERIAL install -r \"$APK_PATH\"" $FILE_TIMEOUT)
+    [[ $? -eq 0 && "$OUTPUT" =~ Success ]] && echo -e "${GREEN}APK installed: $(basename "$APK_PATH")${ENDC}" || echo -e "${RED}Installation failed.${ENDC}"
+}
+
+uninstall_package() {
+    read -p "Package name (e.g., com.example.app): " PKG
+    if [[ -z "$PKG" ]]; then
+        echo -e "${RED}Package name required.${ENDC}"
+        return
+    fi
+    if ! $ADB -s $SERIAL shell pm list packages | grep -q "package:$PKG"; then
+        echo -e "${RED}Package not found: $PKG${ENDC}"
+        return
+    fi
+    confirm_action "Uninstall $PKG?" || return
+    OUTPUT=$(run_command "$ADB -s $SERIAL uninstall $PKG" $DEFAULT_TIMEOUT)
+    [[ $? -eq 0 && "$OUTPUT" =~ Success ]] && echo -e "${GREEN}Package uninstalled: $PKG${ENDC}" || echo -e "${RED}Uninstall failed.${ENDC}"
+}
+
+list_packages() {
+    echo -e "${GREEN}Package List Options${ENDC}"
+    echo "1. All packages"
+    echo "2. System packages"
+    echo "3. User packages"
+    echo "4. Enabled packages"
+    echo "5. Disabled packages"
+    read -p "Select option (1-5): " CHOICE
+    case $CHOICE in
+        1) FILTER="" ;;
+        2) FILTER="-s" ;;
+        3) FILTER="-3" ;;
+        4) FILTER="-e" ;;
+        5) FILTER="-d" ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}"; return ;;
+    esac
+    OUTPUT=$(run_command "$ADB -s $SERIAL shell pm list packages $FILTER" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 ]]; then
+        PKG_COUNT=$(echo "$OUTPUT" | wc -l)
+        echo -e "${GREEN}Found $PKG_COUNT packages:${ENDC}"
+        echo "------------------------------------------------------------"
+        echo "$OUTPUT" | sed 's/package://' | sort
+        echo "------------------------------------------------------------"
+    else
+        echo -e "${RED}Failed to list packages.${ENDC}"
+    fi
+}
+
+list_device_directory() {
+    read -p "Device directory path (default: /sdcard/): " DIR
+    DIR=${DIR:-/sdcard/}
+    if ! $ADB -s $SERIAL shell test -d "$DIR" 2>/dev/null; then
+        echo -e "${RED}Directory does not exist on device.${ENDC}"
+        return
+    fi
+    OUTPUT=$(run_command "$ADB -s $SERIAL shell ls -la \"$DIR\"" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}Contents of $DIR:${ENDC}"
+        echo "------------------------------------------------------------"
+        echo "$OUTPUT"
+        echo "------------------------------------------------------------"
+        FILE_COUNT=$(echo "$OUTPUT" | grep -c "^-")
+        DIR_COUNT=$(echo "$OUTPUT" | grep -c "^d")
+        echo -e "${BLUE}Summary: $DIR_COUNT directories, $FILE_COUNT files${ENDC}"
+    else
+        echo -e "${RED}Failed to list directory.${ENDC}"
+    fi
+}
+
+pull_kernel() {
+    echo -e "${BLUE}Gathering kernel info...${ENDC}"
+    KERNEL_INFO=$(run_command "$ADB -s $SERIAL shell cat /proc/version" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 ]]; then
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        FILENAME="kernel_info_$TIMESTAMP.txt"
+        {
+            echo "Kernel Information Report"
+            echo "Generated: $(date)"
+            echo "Device: $(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+')"
+            echo "Serial: $(echo $DEVICE_INFO | grep -oP 'serial=\K[^ ]+')"
+            echo -e "\nKernel Version"
+            echo "$KERNEL_INFO"
+            echo -e "\nCPU Information"
+            $ADB -s $SERIAL shell cat /proc/cpuinfo 2>/dev/null
+            echo -e "\nMemory Information"
+            $ADB -s $SERIAL shell cat /proc/meminfo 2>/dev/null
+        } > "$FILENAME"
+        FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null)
+        echo -e "${GREEN}Kernel info saved to $FILENAME ($FILE_SIZE bytes)${ENDC}"
+    else
+        echo -e "${RED}Failed to pull kernel info.${ENDC}"
+    fi
+}
+
+fastboot_flash() {
+    read -p "Partition name (e.g., boot, recovery): " PARTITION
+    if [[ -z "$PARTITION" ]]; then return; fi
+    read -p "Image file path: " IMAGE_PATH
+    if [[ ! -f "$IMAGE_PATH" ]]; then
+        echo -e "${RED}Image file does not exist.${ENDC}"
+        return
+    fi
+    echo -e "${RED}${BOLD}⚠️ CRITICAL WARNING: FLASHING $PARTITION ⚠️${ENDC}"
+    if [[ " boot system recovery bootloader radio vendor userdata cache misc persist vbmeta " =~ " $PARTITION " ]]; then
+        echo -e "${RED}$PARTITION is critical. Wrong image may brick device.${ENDC}"
+    fi
+    confirm_action "Flash $PARTITION with $(basename "$IMAGE_PATH")?" || return
+    confirm_action "FINAL CONFIRMATION. Proceed?" || return
+    OUTPUT=$(run_command "$FASTBOOT flash $PARTITION \"$IMAGE_PATH\"" $FASTBOOT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Flash successful.${ENDC}" || echo -e "${RED}Flash failed.${ENDC}"
+}
+
+fastboot_erase() {
+    read -p "Partition name to ERASE (e.g., userdata, cache): " PARTITION
+    if [[ -z "$PARTITION" ]]; then return; fi
+    echo -e "${RED}${BOLD}⚠️ CRITICAL WARNING: ERASING $PARTITION ⚠️${ENDC}"
+    if [[ " boot system recovery bootloader radio vendor misc persist vbmeta " =~ " $PARTITION " ]]; then
+        echo -e "${RED}Erasing $PARTITION may brick device.${ENDC}"
+    fi
+    confirm_action "Erase $PARTITION?" || return
+    OUTPUT=$(run_command "$FASTBOOT erase $PARTITION" $DEFAULT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Erase successful.${ENDC}" || echo -e "${RED}Erase failed.${ENDC}"
+}
+
+fastboot_format() {
+    read -p "Partition to FORMAT (e.g., userdata): " PARTITION
+    read -p "Filesystem type (e.g., ext4, f2fs): " FSTYPE
+    if [[ -z "$PARTITION" || -z "$FSTYPE" ]]; then return; fi
+    echo -e "${RED}${BOLD}⚠️ CRITICAL WARNING: FORMATTING $PARTITION ⚠️${ENDC}"
+    confirm_action "Format $PARTITION as $FSTYPE?" || return
+    OUTPUT=$(run_command "$FASTBOOT format:$FSTYPE $PARTITION" $FASTBOOT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Format successful.${ENDC}" || echo -e "${RED}Format failed.${ENDC}"
+}
+
+fastboot_boot() {
+    read -p "Image file path to boot: " IMAGE_PATH
+    if [[ ! -f "$IMAGE_PATH" ]]; then
+        echo -e "${RED}Image file does not exist.${ENDC}"
+        return
+    fi
+    confirm_action "Boot $(basename "$IMAGE_PATH")?" || return
+    OUTPUT=$(run_command "$FASTBOOT boot \"$IMAGE_PATH\"" $FASTBOOT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Boot command sent.${ENDC}" || echo -e "${RED}Boot failed.${ENDC}"
+}
+
+fastboot_unlock() {
+    echo -e "${RED}${BOLD}Unlocking bootloader WIPES ALL DATA.${ENDC}"
+    confirm_action "Proceed with unlocking?" || return
+    OUTPUT=$(run_command "$FASTBOOT flashing unlock" $DEFAULT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Unlock command sent. Check device screen.${ENDC}" || echo -e "${RED}Unlock failed. Try 'fastboot oem unlock'.${ENDC}"
+}
+
+fastboot_lock() {
+    echo -e "${RED}${BOLD}Locking bootloader may brick device with custom software.${ENDC}"
+    confirm_action "Proceed with locking?" || return
+    OUTPUT=$(run_command "$FASTBOOT flashing lock" $DEFAULT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Lock command sent. Check device screen.${ENDC}" || echo -e "${RED}Lock command failed.${ENDC}"
+}
+
+fastboot_set_active_slot() {
+    read -p "Slot to set active ('a' or 'b'): " SLOT
+    if [[ "$SLOT" != "a" && "$SLOT" != "b" ]]; then
+        echo -e "${RED}Invalid slot. Use 'a' or 'b'.${ENDC}"
+        return
+    fi
+    confirm_action "Set active slot to $SLOT?" || return
+    OUTPUT=$(run_command "$FASTBOOT --set-active=$SLOT" $DEFAULT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Active slot set to $SLOT.${ENDC}" || echo -e "${RED}Failed to set active slot.${ENDC}"
+}
+
+fastboot_getvar_all() {
+    echo -e "${BLUE}Fetching bootloader variables...${ENDC}"
+    OUTPUT=$(run_command "$FASTBOOT getvar all" $DEFAULT_TIMEOUT 2>&1)
+    if [[ $? -eq 0 || -n "$OUTPUT" ]]; then
+        echo -e "${GREEN}Device Variables:${ENDC}"
+        echo "------------------------------------------------------------"
+        echo "$OUTPUT"
+        echo "------------------------------------------------------------"
+    else
+        echo -e "${RED}Failed to get variables.${ENDC}"
+    fi
+}
+
+fastboot_reboot() {
+    clear_screen
+    echo -e "${BOLD}${GREEN}Fastboot Reboot Options${ENDC}"
+    echo "1. Reboot to System"
+    echo "2. Reboot to Bootloader"
+    echo "3. Reboot to Recovery"
+    echo "4. Continue Boot"
+    echo "5. Cancel"
+    read -p "Select option: " CHOICE
+    case $CHOICE in
+        1) run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT && echo -e "${GREEN}Reboot command sent.${ENDC}";;
+        2) run_command "$FASTBOOT reboot-bootloader" $DEFAULT_TIMEOUT && echo -e "${GREEN}Reboot command sent.${ENDC}";;
+        3) run_command "$FASTBOOT reboot recovery" $DEFAULT_TIMEOUT && echo -e "${GREEN}Reboot command sent.${ENDC}";;
+        4) run_command "$FASTBOOT continue" $DEFAULT_TIMEOUT && echo -e "${GREEN}Continue command sent.${ENDC}";;
+        5) ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}";;
+    esac
+}
+
+fastboot_devices() {
+    OUTPUT=$(run_command "$FASTBOOT devices" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}Fastboot devices:${ENDC}"
+        echo "------------------------------"
+        [[ -n "$OUTPUT" ]] && echo "$OUTPUT" || echo "No devices found."
+        echo "------------------------------"
+    fi
+}
+
+fastboot_flash_all() {
+    read -p "Path to image directory: " IMG_DIR
+    if [[ ! -d "$IMG_DIR" ]]; then
+        echo -e "${RED}Directory does not exist.${ENDC}"
+        return
+    fi
+    echo -e "${RED}${BOLD}⚠️ CRITICAL WARNING: FLASHING ALL PARTITIONS ⚠️${ENDC}"
+    confirm_action "Flash all partitions in $IMG_DIR?" || return
+    confirm_action "FINAL CONFIRMATION. Proceed?" || return
+    for IMG in "$IMG_DIR"/*.img; do
+        if [[ -f "$IMG" ]]; then
+            PARTITION=$(basename "$IMG" .img)
+            run_command "$FASTBOOT flash $PARTITION \"$IMG\"" $FASTBOOT_TIMEOUT
+        fi
+    done
+    echo -e "${GREEN}Flash all complete.${ENDC}"
+}
+
+fastboot_wipe() {
+    echo -e "${RED}${BOLD}⚠️ Wiping device will ERASE ALL DATA ⚠️${ENDC}"
+    confirm_action "Wipe device?" || return
+    OUTPUT=$(run_command "$FASTBOOT -w" $FASTBOOT_TIMEOUT)
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Wipe successful.${ENDC}" || echo -e "${RED}Wipe failed.${ENDC}"
+}
+
+fastboot_oem_commands() {
+    echo -e "${GREEN}OEM Commands${ENDC}"
+    echo "1. OEM Unlock"
+    echo "2. OEM Lock"
+    echo "3. OEM Device Info"
+    echo "4. OEM Custom Command"
+    echo "5. Cancel"
+    read -p "Select option: " CHOICE
+    case $CHOICE in
+        1) confirm_action "OEM Unlock (wipes data)?" && run_command "$FASTBOOT oem unlock" $DEFAULT_TIMEOUT && echo -e "${GREEN}OEM Unlock sent.${ENDC}";;
+        2) confirm_action "OEM Lock?" && run_command "$FASTBOOT oem lock" $DEFAULT_TIMEOUT && echo -e "${GREEN}OEM Lock sent.${ENDC}";;
+        3) run_command "$FASTBOOT oem device-info" $DEFAULT_TIMEOUT;;
+        4) read -p "Enter OEM command: " CMD && run_command "$FASTBOOT oem $CMD" $DEFAULT_TIMEOUT;;
+        5) ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}";;
+    esac
+}
+
+reboot_device() {
+    read -p "Reboot mode (system/recovery/bootloader, default system): " MODE
+    MODE=${MODE:-system}
+    confirm_action "Reboot to $MODE?" || return
+    run_command "$ADB -s $SERIAL reboot $MODE" $DEFAULT_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Reboot command sent.${ENDC}" || echo -e "${RED}Reboot failed.${ENDC}"
+}
+
+take_screenshot() {
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    DEVICE_PATH="/sdcard/screenshot_$TIMESTAMP.png"
+    LOCAL_DEST="$(pwd)/screenshot_$TIMESTAMP.png"
+    run_command "$ADB -s $SERIAL shell screencap $DEVICE_PATH" $DEFAULT_TIMEOUT
+    if [[ $? -eq 0 ]]; then
+        echo -e "${BLUE}Pulling screenshot...${ENDC}"
+        run_command "$ADB -s $SERIAL pull $DEVICE_PATH \"$LOCAL_DEST\"" $FILE_TIMEOUT
+        $ADB -s $SERIAL shell rm "$DEVICE_PATH" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            FILE_SIZE=$(stat -c%s "$LOCAL_DEST" 2>/dev/null || stat -f%z "$LOCAL_DEST" 2>/dev/null)
+            echo -e "${GREEN}Screenshot saved: $LOCAL_DEST ($FILE_SIZE bytes)${ENDC}"
+        else
+            echo -e "${RED}Failed to pull screenshot.${ENDC}"
+        fi
+    else
+        echo -e "${RED}Failed to take screenshot.${ENDC}"
+    fi
+}
+
+screen_recording() {
+    read -p "Recording duration (1-180s, default 30): " DURATION
+    DURATION=${DURATION:-30}
+    if [[ ! $DURATION =~ ^[0-9]+$ || $DURATION -lt 1 || $DURATION -gt 180 ]]; then
+        echo -e "${RED}Invalid duration (1-180).${ENDC}"
+        return
+    fi
+    echo "1. Standard quality"
+    echo "2. High quality"
+    echo "3. Low quality"
+    read -p "Select quality (1-3, default 1): " QUALITY
+    case $QUALITY in
+        2) QUALITY_ARG="--bit-rate 8000000" ;;
+        3) QUALITY_ARG="--bit-rate 2000000" ;;
+        *) QUALITY_ARG="" ;;
+    esac
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    DEVICE_PATH="/sdcard/screenrecord_$TIMESTAMP.mp4"
+    LOCAL_DEST="$(pwd)/screenrecord_$TIMESTAMP.mp4"
+    echo -e "${GREEN}Starting ${DURATION}s recording... Ctrl+C to stop.${ENDC}"
+    run_command "$ADB -s $SERIAL shell screenrecord --time-limit=$DURATION $QUALITY_ARG $DEVICE_PATH" $((DURATION+15)) &
+    PID=$!
+    trap 'kill $PID; run_command "$ADB -s $SERIAL shell killall screenrecord" 10; echo -e "${GREEN}Recording stopped.${ENDC}"' INT
+    wait $PID
+    trap - INT
+    echo -e "${BLUE}Pulling video...${ENDC}"
+    run_command "$ADB -s $SERIAL pull $DEVICE_PATH \"$LOCAL_DEST\"" $FILE_TIMEOUT
+    $ADB -s $SERIAL shell rm "$DEVICE_PATH" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        FILE_SIZE=$(stat -c%s "$LOCAL_DEST" 2>/dev/null || stat -f%z "$LOCAL_DEST" 2>/dev/null)
+        echo -e "${GREEN}Video saved: $LOCAL_DEST ($FILE_SIZE bytes)${ENDC}"
+    else
+        echo -e "${RED}Failed to pull video.${ENDC}"
+    fi
+}
+
+logcat() {
+    echo -e "${GREEN}Logcat Options${ENDC}"
+    echo "1. All logs"
+    echo "2. Filter by tag"
+    echo "3. Filter by priority"
+    read -p "Select option (1-3): " CHOICE
+    case $CHOICE in
+        1) FILTER="" ;;
+        2) read -p "Enter tag (e.g., ActivityManager): " TAG; FILTER="$TAG:*" ;;
+        3) read -p "Enter priority (V/D/I/W/E/F): " PRIORITY; FILTER="*:$PRIORITY" ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}"; return ;;
+    esac
+    echo -e "${GREEN}Starting logcat... Ctrl+C to stop.${ENDC}"
+    $ADB -s $SERIAL logcat $FILTER
+    echo -e "${GREEN}Logcat stopped.${ENDC}"
+}
+
+shell_access() {
+    echo -e "${GREEN}Starting shell... Type 'exit' or Ctrl+D to quit.${ENDC}"
+    echo "--------------------------------------------------"
+    $ADB -s $SERIAL shell
+    echo "--------------------------------------------------"
+    echo -e "${GREEN}Shell session ended.${ENDC}"
+}
+
+get_battery_info() {
+    OUTPUT=$(run_command "$ADB -s $SERIAL shell dumpsys battery" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}Battery Information:${ENDC}"
+        echo "------------------------------------------------------------"
+        echo "$OUTPUT"
+        echo "------------------------------------------------------------"
+    else
+        echo -e "${RED}Failed to get battery info.${ENDC}"
+    fi
+}
+
+get_device_ip() {
+    OUTPUT=$(run_command "$ADB -s $SERIAL shell ip addr show wlan0" $DEFAULT_TIMEOUT)
+    if [[ $? -eq 0 && "$OUTPUT" =~ inet ]]; then
+        IP=$(echo "$OUTPUT" | grep -oP 'inet \K[\d.]+' | head -1)
+        echo -e "${GREEN}Device Wi-Fi IP: ${BOLD}$IP${ENDC}"
+    else
+        echo -e "${RED}Could not get IP. Device on Wi-Fi?${ENDC}"
+    fi
+}
+
+toggle_wifi() {
+    echo "1. Enable Wi-Fi"
+    echo "2. Disable Wi-Fi"
+    read -p "Select option (1/2): " CHOICE
+    if [[ "$CHOICE" == "1" ]]; then
+        CMD="enable"
+        ACTION="Enabling"
+        FINAL="enabled"
+    elif [[ "$CHOICE" == "2" ]]; then
+        CMD="disable"
+        ACTION="Disabling"
+        FINAL="disabled"
+    else
+        echo -e "${RED}Invalid choice.${ENDC}"
+        return
+    fi
+    echo -e "${BLUE}$ACTION Wi-Fi...${ENDC}"
+    run_command "$ADB -s $SERIAL shell svc wifi $CMD" $DEFAULT_TIMEOUT
+    [[ $? -eq 0 ]] && echo -e "${GREEN}Wi-Fi $FINAL.${ENDC}" || echo -e "${RED}Failed to change Wi-Fi state.${ENDC}"
+}
+
+adb_advanced() {
+    echo -e "${BOLD}${GREEN}ADB Advanced Operations${ENDC}"
+    echo "1. Backup Device"
+    echo "2. Restore Backup"
+    echo "3. Install Multiple APKs"
+    echo "4. Clear App Data"
+    echo "5. Force Stop App"
+    echo "6. Get System Properties"
+    echo "7. Start Activity"
+    echo "8. Simulate Input"
+    echo "9. Generate Bug Report"
+    echo "10. Enable Wi-Fi Debugging"
+    echo "11. Screen Mirroring (scrcpy)"
+    echo "12. Back to System Menu"
+    read -p "Select option: " CHOICE
+    case $CHOICE in
+        1)
+            read -p "Backup file path (e.g., backup.ab): " BACKUP_PATH
+            run_command "$ADB -s $SERIAL backup -all -f \"$BACKUP_PATH\"" $BACKUP_TIMEOUT
+            ;;
+        2)
+            read -p "Backup file path: " BACKUP_PATH
+            if [[ ! -f "$BACKUP_PATH" ]]; then
+                echo -e "${RED}Backup file does not exist.${ENDC}"
+                return
+            fi
+            run_command "$ADB -s $SERIAL restore \"$BACKUP_PATH\"" $BACKUP_TIMEOUT
+            ;;
+        3)
+            read -p "Directory with APKs: " APK_DIR
+            if [[ ! -d "$APK_DIR" ]]; then
+                echo -e "${RED}Directory does not exist.${ENDC}"
+                return
+            fi
+            FILE_COUNT=$(find "$APK_DIR" -type f -name "*.apk" | wc -l)
+            echo -e "${BLUE}Found $FILE_COUNT APKs${ENDC}"
+            confirm_action "Install $FILE_COUNT APKs?" || return
+            CURRENT=0
+            for APK in "$APK_DIR"/*.apk; do
+                if [[ -f "$APK" ]]; then
+                    CURRENT=$((CURRENT + 1))
+                    echo -e "${BLUE}[$CURRENT/$FILE_COUNT] Installing $(basename "$APK")...${ENDC}"
+                    run_command "$ADB -s $SERIAL install -r \"$APK\"" $FILE_TIMEOUT
+                fi
+            done
+            echo -e "${GREEN}Multiple APK installation complete.${ENDC}"
+            ;;
+        4)
+            read -p "Package name to clear data: " PKG
+            run_command "$ADB -s $SERIAL shell pm clear $PKG" $DEFAULT_TIMEOUT
+            ;;
+        5)
+            read -p "Package name to force stop: " PKG
+            run_command "$ADB -s $SERIAL shell am force-stop $PKG" $DEFAULT_TIMEOUT
+            ;;
+        6)
+            OUTPUT=$(run_command "$ADB -s $SERIAL shell getprop" $DEFAULT_TIMEOUT)
+            if [[ $? -eq 0 ]]; then
+                echo -e "${GREEN}System Properties:${ENDC}"
+                echo "------------------------------------------------------------"
+                echo "$OUTPUT"
+                echo "------------------------------------------------------------"
+            fi
+            ;;
+        7)
+            read -p "Activity (e.g., com.example/.MainActivity): " ACTIVITY
+            run_command "$ADB -s $SERIAL shell am start -n $ACTIVITY" $DEFAULT_TIMEOUT
+            ;;
+        8)
+            read -p "Input command (e.g., 'text hello' or 'keyevent 26'): " INPUT
+            run_command "$ADB -s $SERIAL shell input $INPUT" $DEFAULT_TIMEOUT
+            ;;
+        9)
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BUGREPORT="bugreport_$TIMESTAMP.zip"
+            echo -e "${BLUE}Generating bug report...${ENDC}"
+            run_command "$ADB -s $SERIAL bugreport \"$BUGREPORT\"" $BACKUP_TIMEOUT
+            [[ $? -eq 0 ]] && echo -e "${GREEN}Bug report saved: $BUGREPORT${ENDC}"
+            ;;
+        10)
+            read -p "Port for Wi-Fi debugging (default 5555): " PORT
+            PORT=${PORT:-5555}
+            IP=$($ADB -s $SERIAL shell ip addr show wlan0 | grep -oP 'inet \K[\d.]+' | head -1)
+            if [[ -z "$IP" ]]; then
+                echo -e "${RED}Could not get IP. Ensure Wi-Fi is enabled.${ENDC}"
+                return
+            fi
+            run_command "$ADB -s $SERIAL tcpip $PORT" $DEFAULT_TIMEOUT
+            echo -e "${GREEN}Wi-Fi debugging enabled. Connect with: adb connect $IP:$PORT${ENDC}"
+            ;;
+        11)
+            if command -v scrcpy &>/dev/null; then
+                echo -e "${BLUE}Starting screen mirroring with scrcpy...${ENDC}"
+                scrcpy -s $SERIAL
+            else
+                echo -e "${RED}scrcpy not found. Install from https://github.com/Genymobile/scrcpy${ENDC}"
+            fi
+            ;;
+        12) return ;;
+        *) echo -e "${RED}Invalid choice.${ENDC}";;
+    esac
+    read -p "Press Enter to return..."
+}
+
+file_operations_menu() {
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${GREEN}📁 FILE OPERATIONS${ENDC}"
+        echo "----------------------------------------"
+        echo "1. Push File to Device"
+        echo "2. Pull File from Device"
+        echo "3. Batch Push Directory"
+        echo "4. Batch Pull Directory"
+        echo "5. Install APK"
+        echo "6. Uninstall Package"
+        echo "7. List Installed Packages"
+        echo "8. List Device Directory"
+        echo "9. Pull Kernel Info"
+        echo "10. Back to Main Menu"
+        echo "----------------------------------------"
+        read -p "Select option: " CHOICE
+        clear_screen
+        case $CHOICE in
+            1) push_file ;;
+            2) pull_file ;;
+            3) batch_push ;;
+            4) batch_pull ;;
+            5) install_apk ;;
+            6) uninstall_package ;;
+            7) list_packages ;;
+            8) list_device_directory ;;
+            9) pull_kernel ;;
+            10) break ;;
+            *) echo -e "${RED}Invalid choice.${ENDC}" ;;
+        esac
+        read -p "Press Enter to return..."
+    done
+}
+
+fastboot_menu() {
+    clear_screen
+    echo -e "${BOLD}${RED}⚠️ FASTBOOT MODE - EXTREME CAUTION ⚠️${ENDC}"
+    echo -e "${RED}Incorrect usage may brick device. Ensure correct files for your device model.${ENDC}"
+    confirm_action "Understand risks and continue?" || return
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${GREEN}🔥 FASTBOOT OPERATIONS${ENDC}"
+        echo "----------------------------------------"
+        echo "1. Flash Partition"
+        echo "2. Erase Partition"
+        echo "3. Format Partition"
+        echo "4. Boot Image"
+        echo "5. Unlock Bootloader (Erases Data)"
+        echo "6. Lock Bootloader"
+        echo "7. Set Active Slot (A/B Devices)"
+        echo "8. Get All Device Variables"
+        echo "9. Reboot from Fastboot"
+        echo "10. Check Fastboot Devices"
+        echo "11. Flash All Partitions"
+        echo "12. Wipe Device"
+        echo "13. OEM Commands"
+        echo "14. Back to Main Menu"
+        echo "----------------------------------------"
+        read -p "Select option: " CHOICE
+        clear_screen
+        case $CHOICE in
+            1) fastboot_flash ;;
+            2) fastboot_erase ;;
+            3) fastboot_format ;;
+            4) fastboot_boot ;;
+            5) fastboot_unlock ;;
+            6) fastboot_lock ;;
+            7) fastboot_set_active_slot ;;
+            8) fastboot_getvar_all ;;
+            9) fastboot_reboot ;;
+            10) fastboot_devices ;;
+            11) fastboot_flash_all ;;
+            12) fastboot_wipe ;;
+            13) fastboot_oem_commands ;;
+            14) break ;;
+            *) echo -e "${RED}Invalid choice.${ENDC}" ;;
+        esac
+        read -p "Press Enter to return..."
+    done
+}
+
+system_operations_menu() {
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${GREEN}⚙️ SYSTEM OPERATIONS${ENDC}"
+        echo "----------------------------------------"
+        echo "1. Reboot Device"
+        echo "2. Reboot to Recovery"
+        echo "3. Reboot to Bootloader"
+        echo "4. Take Screenshot"
+        echo "5. Screen Recording"
+        echo "6. View Device Logs (Logcat)"
+        echo "7. Interactive Shell"
+        echo "8. Get Battery Info"
+        echo "9. Get Device IP Address"
+        echo "10. Toggle Wi-Fi"
+        echo "11. Advanced ADB Operations"
+        echo "12. Back to Main Menu"
+        echo "----------------------------------------"
+        read -p "Select option: " CHOICE
+        clear_screen
+        case $CHOICE in
+            1) reboot_device ;;
+            2) reboot_device recovery ;;
+            3) reboot_device bootloader ;;
+            4) take_screenshot ;;
+            5) screen_recording ;;
+            6) logcat ;;
+            7) shell_access ;;
+            8) get_battery_info ;;
+            9) get_device_ip ;;
+            10) toggle_wifi ;;
+            11) adb_advanced ;;
+            12) break ;;
+            *) echo -e "${RED}Invalid choice.${ENDC}" ;;
+        esac
+        read -p "Press Enter to return..."
+    done
+}
+
+main_menu() {
+    check_requirements
+    clear_screen
+    display_info
+    while true; do
+        clear_screen
+        echo -e "\n${BOLD}${BLUE}PYDROIDB MAIN MENU${ENDC}"
+        echo "=================================================="
+        if [[ -z "$DEVICE_INFO" ]]; then
+            echo -e "${GREEN}Searching for devices...${ENDC}"
+            get_device_info
+        fi
+        if [[ -n "$DEVICE_INFO" ]]; then
+            STATE=$(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')
+            COLOR=$([[ "$STATE" == "device" ]] && echo "${GREEN}" || echo "${RED}")
+            echo -e "Connected Device: ${BOLD}$(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+') ${COLOR}($STATE)${ENDC}"
+        else
+            echo -e "${BOLD}${RED}⚠️ No device connected or authorized.${ENDC}"
+            echo -e "${GREEN}Connect an Android device with USB debugging enabled.${ENDC}"
+        fi
+        echo "=================================================="
+        echo "1. Device Information"
+        echo "2. File Operations"
+        echo "3. System Operations"
+        echo "4. Fastboot Operations (DANGEROUS)"
+        echo "5. Refresh Device List"
+        echo "6. Exit"
+        read -p "Select option: " CHOICE
+        if [[ -n "$DEVICE_INFO" && $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+') != "device" && $CHOICE =~ [23] ]]; then
+            echo -e "${RED}Action requires device in 'device' mode. Current state: $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+').${ENDC}"
+            read -p "Press Enter to continue..."
+            continue
+        fi
+        case $CHOICE in
+            1) [[ -n "$DEVICE_INFO" ]] && display_device_info ;;
+            2) [[ -n "$DEVICE_INFO" ]] && file_operations_menu ;;
+            3) [[ -n "$DEVICE_INFO" ]] && system_operations_menu ;;
+            4) fastboot_menu ;;
+            5) DEVICE_INFO="" ;;
+            6) echo -e "${BOLD}${BLUE}Goodbye!${ENDC}"; exit 0 ;;
+            *) echo -e "${RED}Invalid choice.${ENDC}"; sleep 1 ;;
+        esac
+    done
+}
+
+trap 'echo -e "\n${GREEN}Interrupted. Goodbye!${ENDC}"; exit 0' INT
+main_menu
