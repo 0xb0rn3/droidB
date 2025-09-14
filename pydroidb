@@ -998,29 +998,70 @@ samsung_flash_firmware() {
 
 samsung_flash_recovery() {
     echo -e "${BOLD}${GREEN}Samsung Custom Recovery Flash${ENDC}"
+    echo -e "${YELLOW}Supports TWRP, CWM, and other custom recoveries${ENDC}"
     
     detect_samsung_download_mode || return 1
     
-    read -p "Path to recovery image (.img or .tar): " RECOVERY_FILE
+    read -p "Path to recovery image (.img or .tar/.tar.md5): " RECOVERY_FILE
     if [[ ! -f "$RECOVERY_FILE" ]]; then
         echo -e "${RED}Recovery file not found: $RECOVERY_FILE${ENDC}"
         return
     fi
     
+    echo -e "${BLUE}Recovery: $(basename "$RECOVERY_FILE") ($(du -h "$RECOVERY_FILE" 2>/dev/null | cut -f1))${ENDC}"
+    
+    # Warning about custom recovery implications
+    echo -e "${YELLOW}${BOLD}CUSTOM RECOVERY WARNING:${ENDC}"
+    echo -e "${YELLOW}• This will replace the stock recovery${ENDC}"
+    echo -e "${YELLOW}• May trigger Knox security and void warranty${ENDC}"
+    echo -e "${YELLOW}• You may need to disable vbmeta verification${ENDC}"
+    
     confirm_action "Flash custom recovery to Samsung device?" || return
     
     if [[ $ODIN4_INSTALLED == true ]]; then
         echo -e "${BLUE}Using Odin4 for recovery flash...${ENDC}"
-        run_command "sudo odin4 --flash-recovery \"$RECOVERY_FILE\"" $SAMSUNG_FLASH_TIMEOUT
+        
+        # Odin4 uses -a (AP) parameter for recovery flashing
+        # Recovery images are typically flashed as AP files in Odin4
+        CMD="sudo odin4 -a \"$RECOVERY_FILE\""
+        
+        echo -e "${BLUE}Command: $CMD${ENDC}"
+        run_command "$CMD" $SAMSUNG_FLASH_TIMEOUT
+        
     elif [[ $HEIMDALL_INSTALLED == true ]]; then
         echo -e "${BLUE}Using Heimdall for recovery flash...${ENDC}"
-        run_command "sudo heimdall flash --RECOVERY \"$RECOVERY_FILE\"" $SAMSUNG_FLASH_TIMEOUT
+        
+        # Heimdall uses --RECOVERY parameter
+        if [[ "$RECOVERY_FILE" == *.tar || "$RECOVERY_FILE" == *.tar.md5 ]]; then
+            # Extract tar for Heimdall
+            TEMP_DIR=$(mktemp -d)
+            tar -xf "$RECOVERY_FILE" -C "$TEMP_DIR" 2>/dev/null
+            RECOVERY_IMG=$(find "$TEMP_DIR" -name "*.img" | head -1)
+            [[ -z "$RECOVERY_IMG" ]] && RECOVERY_IMG=$(find "$TEMP_DIR" -type f | head -1)
+            
+            if [[ -n "$RECOVERY_IMG" ]]; then
+                CMD="sudo heimdall flash --RECOVERY \"$RECOVERY_IMG\""
+            else
+                echo -e "${RED}Could not extract recovery image from tar file.${ENDC}"
+                rm -rf "$TEMP_DIR"
+                return 1
+            fi
+        else
+            CMD="sudo heimdall flash --RECOVERY \"$RECOVERY_FILE\""
+        fi
+        
+        run_command "$CMD" $SAMSUNG_FLASH_TIMEOUT
+        
+        # Cleanup temp directory
+        [[ -n "$TEMP_DIR" ]] && rm -rf "$TEMP_DIR"
     fi
     
     if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}Custom recovery flashed successfully!${ENDC}"
+        echo -e "${YELLOW}To boot into recovery: Volume Up + Power + Home (or Volume Up + Power)${ENDC}"
+        echo -e "${BLUE}Note: First boot may take longer than usual.${ENDC}"
     else
-        echo -e "${RED}Recovery flash failed.${ENDC}"
+        echo -e "${RED}Recovery flash failed. Check device and files.${ENDC}"
     fi
 }
 
