@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
 
-VERSION="0.1.1"
+# PyDroidb: Complete ADB, Fastboot, GSI & Samsung Automation Tool
+# Enhanced with system-wide installation and GSI flashing support
+# Author: 0xbv1 | 0xb0rn3
+# Version: 0.3.0
+
+VERSION="0.3.0"
 SCRIPT_NAME="pydroidb"
-INSTALL_PATH="/usr/bin/$SCRIPT_NAME"
+INSTALL_DIR="/usr/local/bin"
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# Color definitions
 BLUE='\033[94m'
 GREEN='\033[92m'
 RED='\033[91m'
 YELLOW='\033[93m'
 BOLD='\033[1m'
 ENDC='\033[0m'
+CYAN='\033[96m'
+MAGENTA='\033[95m'
 
 # Timeout configurations
 DEFAULT_TIMEOUT=60
@@ -18,14 +29,300 @@ FASTBOOT_TIMEOUT=600
 SAMSUNG_FLASH_TIMEOUT=1800
 SAMSUNG_PIT_TIMEOUT=300
 SAMSUNG_NAND_TIMEOUT=3600
+GSI_FLASH_TIMEOUT=900
 
 # Samsung device configuration
 SAMSUNG_VENDOR_ID="04e8"
 ODIN4_INSTALLED=false
 HEIMDALL_INSTALLED=false
 
-clear_screen() {
-    clear
+# GSI Support variables
+GSI_DETECTED=false
+DEVICE_ARCH=""
+AB_DEVICE=false
+TREBLE_ENABLED=false
+
+# Installation functions
+check_installation() {
+    if [[ -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+        INSTALLED_VERSION=$(grep "^VERSION=" "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null | cut -d'"' -f2)
+        if [[ "$SCRIPT_PATH" == "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+            return 0  # Running from installed location
+        else
+            return 1  # Script exists but running from different location
+        fi
+    else
+        return 2  # Not installed
+    fi
+}
+
+# GSI (Generic System Image) Operations
+check_gsi_compatibility() {
+    echo -e "${BLUE}Checking GSI compatibility...${ENDC}"
+    
+    # Check Treble support
+    TREBLE=$($ADB -s $SERIAL shell getprop ro.treble.enabled 2>/dev/null | tr -d '\r')
+    if [[ "$TREBLE" != "true" ]]; then
+        echo -e "${RED}Device does not support Treble. GSI cannot be installed.${ENDC}"
+        return 1
+    fi
+    
+    # Check A/B partition
+    AB_UPDATE=$($ADB -s $SERIAL shell getprop ro.build.ab_update 2>/dev/null | tr -d '\r')
+    if [[ "$AB_UPDATE" == "true" ]]; then
+        AB_DEVICE=true
+        echo -e "${GREEN}Device uses A/B partition scheme${ENDC}"
+    else
+        AB_DEVICE=false
+        echo -e "${GREEN}Device uses A-only partition scheme${ENDC}"
+    fi
+    
+    # Check architecture
+    ARCH=$($ADB -s $SERIAL shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+    case "$ARCH" in
+        arm64-v8a)
+            DEVICE_ARCH="arm64"
+            echo -e "${GREEN}Architecture: ARM64 (64-bit)${ENDC}"
+            ;;
+        armeabi-v7a)
+            DEVICE_ARCH="arm32"
+            echo -e "${GREEN}Architecture: ARM (32-bit)${ENDC}"
+            ;;
+        x86_64)
+            DEVICE_ARCH="x86_64"
+            echo -e "${GREEN}Architecture: x86_64${ENDC}"
+            ;;
+        *)
+            echo -e "${YELLOW}Architecture: $ARCH (verify GSI compatibility)${ENDC}"
+            DEVICE_ARCH="$ARCH"
+            ;;
+    esac
+    
+    # Check bootloader status
+    BOOTLOADER=$($FASTBOOT getvar unlocked 2>&1 | grep unlocked | awk '{print $2}')
+    if [[ "$BOOTLOADER" == "yes" ]]; then
+        echo -e "${GREEN}Bootloader: Unlocked${ENDC}"
+    else
+        echo -e "${RED}Bootloader appears locked. Unlock required for GSI.${ENDC}"
+        return 1
+    fi
+    
+    GSI_DETECTED=true
+    echo -e "${GREEN}✓ Device is GSI compatible${ENDC}"
+    return 0
+}
+
+flash_gsi_mediatek() {
+    echo -e "${BOLD}${CYAN}MediaTek GSI Flash Process${ENDC}"
+    echo -e "${YELLOW}Based on Lenovo P11 Gen 2 (TB350XU) recovery method${ENDC}"
+    
+    echo -e "${RED}${BOLD}WARNING: This process will:${ENDC}"
+    echo -e "${RED}• Wipe all user data${ENDC}"
+    echo -e "${RED}• Replace system with GSI${ENDC}"
+    echo -e "${RED}• May brick device if done incorrectly${ENDC}"
+    
+    confirm_action "Proceed with MediaTek GSI flash?" || return
+    
+    # Step 1: Check for stock vbmeta files
+    echo -e "${BLUE}Step 1: Checking for stock vbmeta files...${ENDC}"
+    read -p "Path to stock firmware directory (containing vbmeta.img): " STOCK_DIR
+    
+    if [[ ! -f "$STOCK_DIR/vbmeta.img" ]]; then
+        echo -e "${RED}vbmeta.img not found in $STOCK_DIR${ENDC}"
+        echo -e "${YELLOW}Stock vbmeta is REQUIRED for MediaTek devices${ENDC}"
+        return 1
+    fi
+    
+    # Step 2: Select GSI image
+    read -p "Path to GSI image (.img file): " GSI_PATH
+    if [[ ! -f "$GSI_PATH" ]]; then
+        echo -e "${RED}GSI image not found: $GSI_PATH${ENDC}"
+        return 1
+    fi
+    
+    GSI_SIZE=$(stat -c%s "$GSI_PATH" 2>/dev/null || stat -f%z "$GSI_PATH" 2>/dev/null)
+    echo -e "${BLUE}GSI: $(basename "$GSI_PATH")${ENDC}"
+    echo -e "${BLUE}Size: $(numfmt --to=iec-i --suffix=B $GSI_SIZE)${ENDC}"
+    
+    # Step 3: Enter fastboot mode
+    echo -e "${BLUE}Step 3: Entering fastboot mode...${ENDC}"
+    echo -e "${YELLOW}Manual action required:${ENDC}"
+    echo -e "1. Power off device"
+    echo -e "2. Hold Volume Up + Power"
+    echo -e "3. Connect USB when in fastboot mode"
+    read -p "Press Enter when device is in fastboot mode..."
+    
+    # Verify fastboot connection
+    if ! $FASTBOOT devices | grep -q .; then
+        echo -e "${RED}No device detected in fastboot mode${ENDC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}Device detected in fastboot${ENDC}"
+    
+    # Step 4: Flash stock vbmeta to restore chain
+    echo -e "${BLUE}Step 4: Restoring stock vbmeta chain...${ENDC}"
+    
+    if [[ $AB_DEVICE == true ]]; then
+        run_command "$FASTBOOT flash vbmeta_a \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+        run_command "$FASTBOOT flash vbmeta_b \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+    else
+        run_command "$FASTBOOT flash vbmeta \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+    fi
+    
+    # Step 5: Flash GSI to system
+    echo -e "${BLUE}Step 5: Flashing GSI to system partition...${ENDC}"
+    echo -e "${YELLOW}This may take several minutes for large images...${ENDC}"
+    
+    run_command "$FASTBOOT flash system \"$GSI_PATH\"" $GSI_FLASH_TIMEOUT
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}GSI flash failed${ENDC}"
+        return 1
+    fi
+    
+    # Step 6: Disable vbmeta verification
+    echo -e "${BLUE}Step 6: Disabling vbmeta verification...${ENDC}"
+    
+    if [[ $AB_DEVICE == true ]]; then
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_a \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_b \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+    else
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta \"$STOCK_DIR/vbmeta.img\"" $FASTBOOT_TIMEOUT
+    fi
+    
+    # Step 7: Format userdata (critical)
+    echo -e "${BLUE}Step 7: Formatting userdata (CRITICAL STEP)...${ENDC}"
+    run_command "$FASTBOOT format userdata" $FASTBOOT_TIMEOUT
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "${YELLOW}Format failed, trying wipe instead...${ENDC}"
+        run_command "$FASTBOOT -w" $FASTBOOT_TIMEOUT
+    fi
+    
+    # Step 8: Reboot
+    echo -e "${BLUE}Step 8: Rebooting device...${ENDC}"
+    run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT
+    
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "${GREEN}GSI Flash Complete!${ENDC}"
+    echo -e "${GREEN}Device should boot into GSI now.${ENDC}"
+    echo -e "${YELLOW}First boot may take 5-10 minutes.${ENDC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${ENDC}"
+}
+
+flash_gsi_standard() {
+    echo -e "${BOLD}${CYAN}Standard GSI Flash Process${ENDC}"
+    
+    check_gsi_compatibility || return
+    
+    echo -e "${RED}${BOLD}WARNING: This will wipe all data!${ENDC}"
+    confirm_action "Proceed with GSI installation?" || return
+    
+    # Select GSI image
+    read -p "Path to GSI image: " GSI_PATH
+    if [[ ! -f "$GSI_PATH" ]]; then
+        echo -e "${RED}GSI image not found${ENDC}"
+        return 1
+    fi
+    
+    # Check GSI compatibility with device
+    GSI_NAME=$(basename "$GSI_PATH")
+    if [[ $AB_DEVICE == true && ! "$GSI_NAME" =~ (ab|AB) ]]; then
+        echo -e "${YELLOW}Warning: Device is A/B but GSI may be A-only${ENDC}"
+        confirm_action "Continue anyway?" || return
+    fi
+    
+    if [[ "$DEVICE_ARCH" == "arm64" && ! "$GSI_NAME" =~ (arm64|ARM64|64) ]]; then
+        echo -e "${YELLOW}Warning: Architecture mismatch possible${ENDC}"
+        confirm_action "Continue anyway?" || return
+    fi
+    
+    # Enter fastboot
+    echo -e "${BLUE}Rebooting to bootloader...${ENDC}"
+    run_command "$ADB -s $SERIAL reboot bootloader" $DEFAULT_TIMEOUT
+    sleep 5
+    
+    # Verify fastboot connection
+    if ! $FASTBOOT devices | grep -q .; then
+        echo -e "${RED}Device not detected in fastboot${ENDC}"
+        return 1
+    fi
+    
+    # Disable vbmeta verification
+    echo -e "${BLUE}Disabling vbmeta verification...${ENDC}"
+    
+    # Create empty vbmeta image
+    EMPTY_VBMETA="/tmp/empty_vbmeta.img"
+    dd if=/dev/zero of="$EMPTY_VBMETA" bs=1 count=256 2>/dev/null
+    
+    if [[ $AB_DEVICE == true ]]; then
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_a $EMPTY_VBMETA" $DEFAULT_TIMEOUT
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_b $EMPTY_VBMETA" $DEFAULT_TIMEOUT
+    else
+        run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta $EMPTY_VBMETA" $DEFAULT_TIMEOUT
+    fi
+    
+    # Wipe system
+    echo -e "${BLUE}Erasing system partition...${ENDC}"
+    run_command "$FASTBOOT erase system" $DEFAULT_TIMEOUT
+    
+    # Flash GSI
+    echo -e "${BLUE}Flashing GSI image...${ENDC}"
+    run_command "$FASTBOOT flash system \"$GSI_PATH\"" $GSI_FLASH_TIMEOUT
+    
+    # Wipe userdata
+    echo -e "${BLUE}Wiping userdata...${ENDC}"
+    run_command "$FASTBOOT -w" $FASTBOOT_TIMEOUT
+    
+    # Reboot
+    echo -e "${BLUE}Rebooting...${ENDC}"
+    run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT
+    
+    echo -e "${GREEN}GSI installation complete!${ENDC}"
+    echo -e "${YELLOW}First boot may take several minutes.${ENDC}"
+}
+
+backup_current_rom() {
+    echo -e "${BOLD}${CYAN}ROM Backup Utility${ENDC}"
+    
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="backup_${MODEL}_${TIMESTAMP}"
+    mkdir -p "$BACKUP_DIR"
+    
+    echo -e "${BLUE}Backing up to: $BACKUP_DIR${ENDC}"
+    
+    # Enter fastboot
+    echo -e "${BLUE}Rebooting to bootloader...${ENDC}"
+    run_command "$ADB -s $SERIAL reboot bootloader" $DEFAULT_TIMEOUT
+    sleep 5
+    
+    if ! $FASTBOOT devices | grep -q .; then
+        echo -e "${RED}Device not in fastboot mode${ENDC}"
+        return 1
+    fi
+    
+    # Get partition list
+    echo -e "${BLUE}Getting partition information...${ENDC}"
+    PARTITIONS=$($FASTBOOT getvar all 2>&1 | grep "partition-size" | cut -d: -f2 | cut -d: -f1)
+    
+    echo -e "${YELLOW}Found partitions to backup:${ENDC}"
+    echo "$PARTITIONS"
+    
+    confirm_action "Backup these partitions?" || return
+    
+    # Backup each partition
+    for PARTITION in boot recovery system vendor vbmeta; do
+        if echo "$PARTITIONS" | grep -q "$PARTITION"; then
+            echo -e "${BLUE}Backing up $PARTITION...${ENDC}"
+            run_command "$FASTBOOT fetch $PARTITION $BACKUP_DIR/${PARTITION}.img" $BACKUP_TIMEOUT
+        fi
+    done
+    
+    echo -e "${GREEN}Backup complete! Files saved to $BACKUP_DIR${ENDC}"
+    
+    # Reboot to system
+    run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT
 }
 
 # Fastboot operations
@@ -429,273 +726,256 @@ adb_advanced() {
         *) echo -e "${RED}Invalid choice.${ENDC}";;
     esac
     read -p "Press Enter to return..."
-}
 
-display_info() {
-    echo -e "${BOLD}${BLUE}Pydroidb: ADB, Fastboot & Samsung Automation Tool v${VERSION}${ENDC}"
-    echo -e "${GREEN}Author: 0xbv1 | 0xb0rn3${ENDC}"
-    echo -e "${GREEN}GitHub: https://github.com/0xb0rn3/pydroidb${ENDC}"
-    echo -e "${GREEN}Platform: $(uname -s) $(uname -m)${ENDC}"
-    echo -e "${YELLOW}Samsung Support: Odin4 + Heimdall Integrated${ENDC}"
-    echo -e "${RED}${BOLD}============================[ SAFETY WARNING ]============================${ENDC}"
-    echo -e "${RED}This tool modifies device firmware and can cause permanent damage if used incorrectly.${ENDC}"
-    echo -e "${RED}Samsung operations may void warranty and trigger Knox security features.${ENDC}"
-    echo -e "${RED}Always back up data and have official recovery images. USE AT YOUR OWN RISK.${ENDC}"
-    echo -e "${RED}${BOLD}=========================================================================${ENDC}"
+install_systemwide() {
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${CYAN}       PyDroidb System-wide Installation Setup         ${ENDC}"
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════${ENDC}"
     
-    # Check if tool is installed system-wide
-    if [[ -f "$INSTALL_PATH" && "$0" == "$INSTALL_PATH" ]]; then
-        echo -e "${GREEN}${BOLD}✓ Tool is installed system-wide${ENDC}"
-    elif [[ -f "$INSTALL_PATH" ]]; then
-        echo -e "${YELLOW}⚠ Tool is available system-wide but running from local directory${ENDC}"
+    check_installation
+    INSTALL_STATUS=$?
+    
+    if [[ $INSTALL_STATUS -eq 0 ]]; then
+        echo -e "${YELLOW}PyDroidb is already installed system-wide (v$INSTALLED_VERSION)${ENDC}"
+        echo -e "${YELLOW}Current version: v$VERSION${ENDC}"
+        read -p "Do you want to update/reinstall? (y/N): " UPDATE_CHOICE
+        if [[ ! "$UPDATE_CHOICE" =~ ^[Yy] ]]; then
+            echo -e "${GREEN}Installation cancelled.${ENDC}"
+            return 0
+        fi
+    elif [[ $INSTALL_STATUS -eq 1 ]]; then
+        echo -e "${YELLOW}PyDroidb is installed (v$INSTALLED_VERSION) but you're running from:${ENDC}"
+        echo -e "${YELLOW}$SCRIPT_PATH${ENDC}"
+        echo -e "${CYAN}System installation location: $INSTALL_DIR/$SCRIPT_NAME${ENDC}"
+        read -p "Update system installation with this version? (y/N): " UPDATE_CHOICE
+        if [[ ! "$UPDATE_CHOICE" =~ ^[Yy] ]]; then
+            return 0
+        fi
     else
-        echo -e "${BLUE}ℹ Run with --install to install system-wide${ENDC}"
+        echo -e "${GREEN}Installing PyDroidb system-wide for the first time...${ENDC}"
     fi
     
-    read -p "Press Enter to continue..."
-}
-
-# System installation functions
-install_systemwide() {
-    echo -e "${BOLD}${BLUE}System-wide Installation${ENDC}"
-    echo "=================================="
-    echo -e "${BLUE}This will install pydroidb to /usr/bin/ for system-wide access${ENDC}"
-    echo -e "${YELLOW}You'll be able to run 'pydroidb' from anywhere in your terminal${ENDC}"
-    
-    # Check if already installed
-    if [[ -f "$INSTALL_PATH" ]]; then
-        echo -e "${YELLOW}Tool is already installed at $INSTALL_PATH${ENDC}"
-        read -p "Reinstall/update? (y/N): " REINSTALL
-        if [[ ! "$REINSTALL" =~ ^[Yy] ]]; then
-            echo -e "${BLUE}Installation cancelled.${ENDC}"
-            return 0
+    # Check for root/sudo access
+    if [[ $EUID -eq 0 ]]; then
+        SUDO_CMD=""
+    else
+        echo -e "${YELLOW}System-wide installation requires sudo privileges.${ENDC}"
+        SUDO_CMD="sudo"
+        if ! sudo -v 2>/dev/null; then
+            echo -e "${RED}Failed to obtain sudo privileges. Installation aborted.${ENDC}"
+            return 1
         fi
     fi
     
-    # Check if running as root or can sudo
-    if [[ $EUID -eq 0 ]]; then
-        echo -e "${GREEN}Running as root - proceeding with installation${ENDC}"
-        SUDO_CMD=""
-    elif command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
-        echo -e "${GREEN}Sudo access available - proceeding with installation${ENDC}"
-        SUDO_CMD="sudo"
-    elif command -v sudo &>/dev/null; then
-        echo -e "${YELLOW}Sudo required for installation${ENDC}"
-        SUDO_CMD="sudo"
-    else
-        echo -e "${RED}Root access required for system installation${ENDC}"
-        echo -e "${YELLOW}Run as root or install sudo to continue${ENDC}"
-        return 1
-    fi
+    echo -e "\n${BOLD}${BLUE}Installation Details:${ENDC}"
+    echo -e "├─ ${CYAN}Source:${ENDC} $SCRIPT_PATH"
+    echo -e "├─ ${CYAN}Target:${ENDC} $INSTALL_DIR/$SCRIPT_NAME"
+    echo -e "├─ ${CYAN}Version:${ENDC} $VERSION"
+    echo -e "└─ ${CYAN}Access:${ENDC} System-wide (all users)"
     
-    # Get the current script path
-    CURRENT_SCRIPT="$(realpath "$0")"
+    echo -e "\n${YELLOW}This will:${ENDC}"
+    echo -e "  • Copy PyDroidb to $INSTALL_DIR/"
+    echo -e "  • Make it executable for all users"
+    echo -e "  • Allow running 'pydroidb' from anywhere"
     
-    if [[ ! -f "$CURRENT_SCRIPT" ]]; then
-        echo -e "${RED}Cannot determine current script location${ENDC}"
-        return 1
-    fi
-    
-    echo -e "${BLUE}Installing from: $CURRENT_SCRIPT${ENDC}"
-    echo -e "${BLUE}Installing to: $INSTALL_PATH${ENDC}"
-    
-    # Confirm installation
-    read -p "Proceed with system installation? (y/N): " CONFIRM
+    read -p $'\n'"Proceed with installation? (y/N): " CONFIRM
     if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-        echo -e "${BLUE}Installation cancelled.${ENDC}"
-        return 0
+        echo -e "${RED}Installation cancelled.${ENDC}"
+        return 1
     fi
     
-    # Copy script to /usr/bin
-    if $SUDO_CMD cp "$CURRENT_SCRIPT" "$INSTALL_PATH" 2>/dev/null; then
-        echo -e "${GREEN}✓ Script copied to $INSTALL_PATH${ENDC}"
+    echo -e "\n${BLUE}Installing PyDroidb...${ENDC}"
+    
+    if [[ -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+        echo -e "${BLUE}Creating backup of existing installation...${ENDC}"
+        $SUDO_CMD cp "$INSTALL_DIR/$SCRIPT_NAME" "$INSTALL_DIR/${SCRIPT_NAME}.backup" 2>/dev/null
+    fi
+    
+    echo -e "${BLUE}Copying script to $INSTALL_DIR...${ENDC}"
+    if $SUDO_CMD cp "$SCRIPT_PATH" "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null; then
+        echo -e "${GREEN}✓ Script copied successfully${ENDC}"
     else
         echo -e "${RED}✗ Failed to copy script${ENDC}"
         return 1
     fi
     
-    # Make executable
-    if $SUDO_CMD chmod +x "$INSTALL_PATH" 2>/dev/null; then
-        echo -e "${GREEN}✓ Made executable${ENDC}"
+    echo -e "${BLUE}Setting executable permissions...${ENDC}"
+    if $SUDO_CMD chmod 755 "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null; then
+        echo -e "${GREEN}✓ Permissions set successfully${ENDC}"
     else
-        echo -e "${RED}✗ Failed to set executable permissions${ENDC}"
+        echo -e "${RED}✗ Failed to set permissions${ENDC}"
         return 1
     fi
     
-    # Test installation
-    if command -v pydroidb &>/dev/null; then
-        INSTALLED_VERSION=$(pydroidb --version 2>/dev/null | grep -oP 'v\K[\d.]+' || echo "unknown")
-        echo -e "${GREEN}✓ Installation successful!${ENDC}"
-        echo -e "${GREEN}  Installed version: $INSTALLED_VERSION${ENDC}"
-        echo -e "${BLUE}  You can now run 'pydroidb' from anywhere${ENDC}"
-        
-        # Offer to create desktop entry
-        create_desktop_entry
-        
-        return 0
+    echo -e "${BLUE}Verifying installation...${ENDC}"
+    if [[ -f "$INSTALL_DIR/$SCRIPT_NAME" ]] && [[ -x "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+        INSTALLED_VER=$("$INSTALL_DIR/$SCRIPT_NAME" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+        echo -e "${GREEN}✓ Installation verified (v$INSTALLED_VER)${ENDC}"
     else
         echo -e "${RED}✗ Installation verification failed${ENDC}"
         return 1
     fi
-}
-
-uninstall_systemwide() {
-    echo -e "${BOLD}${RED}System-wide Uninstallation${ENDC}"
-    echo "===================================="
     
-    if [[ ! -f "$INSTALL_PATH" ]]; then
-        echo -e "${YELLOW}Tool is not installed system-wide${ENDC}"
-        return 0
+    if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+        echo -e "\n${YELLOW}⚠ Warning: $INSTALL_DIR is not in your PATH${ENDC}"
+        echo -e "${YELLOW}Add the following to your ~/.bashrc or ~/.zshrc:${ENDC}"
+        echo -e "${CYAN}export PATH=\"\$PATH:$INSTALL_DIR\"${ENDC}"
     fi
     
-    echo -e "${YELLOW}This will remove pydroidb from /usr/bin/${ENDC}"
-    read -p "Proceed with uninstallation? (y/N): " CONFIRM
-    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
-        echo -e "${BLUE}Uninstallation cancelled.${ENDC}"
-        return 0
+    if [[ ! -f "/usr/bin/$SCRIPT_NAME" ]]; then
+        echo -e "\n${BLUE}Creating symlink in /usr/bin for compatibility...${ENDC}"
+        if $SUDO_CMD ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "/usr/bin/$SCRIPT_NAME" 2>/dev/null; then
+            echo -e "${GREEN}✓ Symlink created in /usr/bin${ENDC}"
+        else
+            echo -e "${YELLOW}Note: Could not create symlink in /usr/bin (non-critical)${ENDC}"
+        fi
     fi
     
-    # Check for sudo
-    if [[ $EUID -eq 0 ]]; then
-        SUDO_CMD=""
-    elif command -v sudo &>/dev/null; then
-        SUDO_CMD="sudo"
-    else
-        echo -e "${RED}Root access required for uninstallation${ENDC}"
-        return 1
-    fi
+    echo -e "\n${BOLD}${GREEN}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${GREEN}         Installation Completed Successfully!          ${ENDC}"
+    echo -e "${BOLD}${GREEN}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "\n${CYAN}You can now run PyDroidb from anywhere by typing:${ENDC}"
+    echo -e "${BOLD}${YELLOW}  pydroidb${ENDC}"
+    echo -e "\n${CYAN}Available commands:${ENDC}"
+    echo -e "  ${GREEN}pydroidb${ENDC}           - Launch PyDroidb"
+    echo -e "  ${GREEN}pydroidb --help${ENDC}     - Show help"
+    echo -e "  ${GREEN}pydroidb --version${ENDC}  - Show version"
+    echo -e "  ${GREEN}pydroidb --install${ENDC}  - Install/update system-wide"
+    echo -e "  ${GREEN}pydroidb --uninstall${ENDC} - Remove system installation"
     
-    # Remove the installed script
-    if $SUDO_CMD rm "$INSTALL_PATH" 2>/dev/null; then
-        echo -e "${GREEN}✓ Removed $INSTALL_PATH${ENDC}"
-    else
-        echo -e "${RED}✗ Failed to remove installed script${ENDC}"
-        return 1
-    fi
-    
-    # Remove desktop entry if it exists
-    DESKTOP_FILE="$HOME/.local/share/applications/pydroidb.desktop"
-    if [[ -f "$DESKTOP_FILE" ]]; then
-        rm "$DESKTOP_FILE" 2>/dev/null
-        echo -e "${GREEN}✓ Removed desktop entry${ENDC}"
-    fi
-    
-    echo -e "${GREEN}✓ Uninstallation complete${ENDC}"
     return 0
 }
 
-create_desktop_entry() {
-    if [[ "$XDG_CURRENT_DESKTOP" == "" && "$DISPLAY" == "" ]]; then
-        return 0  # Not in a desktop environment
-    fi
+uninstall_systemwide() {
+    echo -e "${BOLD}${RED}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${RED}        PyDroidb System-wide Uninstallation           ${ENDC}"
+    echo -e "${BOLD}${RED}═══════════════════════════════════════════════════════${ENDC}"
     
-    read -p "Create desktop entry for GUI access? (y/N): " CREATE_DESKTOP
-    if [[ ! "$CREATE_DESKTOP" =~ ^[Yy] ]]; then
+    if [[ ! -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+        echo -e "${YELLOW}PyDroidb is not installed system-wide.${ENDC}"
         return 0
     fi
     
-    DESKTOP_DIR="$HOME/.local/share/applications"
-    DESKTOP_FILE="$DESKTOP_DIR/pydroidb.desktop"
+    echo -e "${YELLOW}This will remove:${ENDC}"
+    echo -e "  • $INSTALL_DIR/$SCRIPT_NAME"
+    [[ -L "/usr/bin/$SCRIPT_NAME" ]] && echo -e "  • /usr/bin/$SCRIPT_NAME (symlink)"
+    [[ -f "$INSTALL_DIR/${SCRIPT_NAME}.backup" ]] && echo -e "  • $INSTALL_DIR/${SCRIPT_NAME}.backup"
     
-    mkdir -p "$DESKTOP_DIR" 2>/dev/null
-    
-    cat > "$DESKTOP_FILE" << 'EOF'
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Pydroidb
-Comment=Android Device Management Tool
-Exec=pydroidb
-Icon=phone
-Terminal=true
-Categories=Development;System;
-Keywords=android;adb;fastboot;samsung;
-EOF
-    
-    if [[ -f "$DESKTOP_FILE" ]]; then
-        chmod +x "$DESKTOP_FILE" 2>/dev/null
-        echo -e "${GREEN}✓ Desktop entry created${ENDC}"
-    else
-        echo -e "${YELLOW}⚠ Failed to create desktop entry${ENDC}"
+    read -p $'\n'"Confirm uninstallation? (y/N): " CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+        echo -e "${GREEN}Uninstallation cancelled.${ENDC}"
+        return 0
     fi
-}
-
-check_installation_status() {
-    echo -e "${BOLD}${BLUE}Installation Status${ENDC}"
-    echo "======================="
     
-    if [[ -f "$INSTALL_PATH" ]]; then
-        INSTALLED_VERSION=$(pydroidb --version 2>/dev/null | grep -oP 'v\K[\d.]+' || echo "unknown")
-        echo -e "${GREEN}✓ System installation: Found${ENDC}"
-        echo -e "  Location: $INSTALL_PATH"
-        echo -e "  Version: $INSTALLED_VERSION"
-        
-        if [[ "$0" == "$INSTALL_PATH" ]]; then
-            echo -e "  Status: ${GREEN}Running from system installation${ENDC}"
-        else
-            echo -e "  Status: ${YELLOW}Available but running from local copy${ENDC}"
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${YELLOW}Uninstallation requires sudo privileges.${ENDC}"
+        SUDO_CMD="sudo"
+        if ! sudo -v 2>/dev/null; then
+            echo -e "${RED}Failed to obtain sudo privileges.${ENDC}"
+            return 1
         fi
     else
-        echo -e "${RED}✗ System installation: Not found${ENDC}"
+        SUDO_CMD=""
     fi
     
-    # Check desktop entry
-    DESKTOP_FILE="$HOME/.local/share/applications/pydroidb.desktop"
-    if [[ -f "$DESKTOP_FILE" ]]; then
-        echo -e "${GREEN}✓ Desktop entry: Found${ENDC}"
+    echo -e "${BLUE}Removing $INSTALL_DIR/$SCRIPT_NAME...${ENDC}"
+    if $SUDO_CMD rm -f "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null; then
+        echo -e "${GREEN}✓ Script removed${ENDC}"
     else
-        echo -e "${YELLOW}⚠ Desktop entry: Not found${ENDC}"
+        echo -e "${RED}✗ Failed to remove script${ENDC}"
     fi
     
-    # Check PATH
-    if command -v pydroidb &>/dev/null; then
-        WHICH_PYDROIDB=$(which pydroidb)
-        echo -e "${GREEN}✓ Command available: $WHICH_PYDROIDB${ENDC}"
-    else
-        echo -e "${RED}✗ Command not found in PATH${ENDC}"
+    if [[ -L "/usr/bin/$SCRIPT_NAME" ]]; then
+        echo -e "${BLUE}Removing /usr/bin/$SCRIPT_NAME symlink...${ENDC}"
+        $SUDO_CMD rm -f "/usr/bin/$SCRIPT_NAME" 2>/dev/null
+        echo -e "${GREEN}✓ Symlink removed${ENDC}"
     fi
+    
+    if [[ -f "$INSTALL_DIR/${SCRIPT_NAME}.backup" ]]; then
+        echo -e "${BLUE}Removing backup...${ENDC}"
+        $SUDO_CMD rm -f "$INSTALL_DIR/${SCRIPT_NAME}.backup" 2>/dev/null
+        echo -e "${GREEN}✓ Backup removed${ENDC}"
+    fi
+    
+    echo -e "\n${BOLD}${GREEN}Uninstallation completed successfully!${ENDC}"
+    return 0
 }
 
-# Handle command line arguments
-handle_arguments() {
-    case "$1" in
-        --install|-i)
-            install_systemwide
-            exit $?
-            ;;
-        --uninstall|-u)
-            uninstall_systemwide
-            exit $?
-            ;;
-        --status|-s)
-            check_installation_status
-            exit 0
-            ;;
-        --version|-v)
-            echo "Pydroidb v$VERSION"
-            exit 0
-            ;;
-        --help|-h)
-            echo "Pydroidb - Android Device Management Tool v$VERSION"
-            echo ""
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --install, -i      Install system-wide to /usr/bin"
-            echo "  --uninstall, -u    Remove system-wide installation"
-            echo "  --status, -s       Check installation status"
-            echo "  --version, -v      Show version information"
-            echo "  --help, -h         Show this help message"
-            echo ""
-            echo "Without options, starts the interactive menu."
-            exit 0
-            ;;
-        --*)
-            echo -e "${RED}Unknown option: $1${ENDC}"
-            echo "Use --help for available options"
-            exit 1
-            ;;
+show_version() {
+    echo -e "${BOLD}${CYAN}PyDroidb${ENDC} - ADB, Fastboot, GSI & Samsung Automation Tool"
+    echo -e "Version: ${GREEN}$VERSION${ENDC}"
+    echo -e "Author: ${YELLOW}0xbv1 | 0xb0rn3${ENDC}"
+    
+    check_installation
+    case $? in
+        0) echo -e "Status: ${GREEN}Installed system-wide${ENDC}" ;;
+        1) echo -e "Status: ${YELLOW}Installed but running from different location${ENDC}" ;;
+        2) echo -e "Status: ${YELLOW}Not installed system-wide${ENDC}" ;;
     esac
+}
+
+show_help() {
+    echo -e "${BOLD}${CYAN}PyDroidb - Advanced Android Device Manager${ENDC}"
+    echo -e "${GREEN}Version $VERSION${ENDC}"
+    echo ""
+    echo -e "${BOLD}USAGE:${ENDC}"
+    echo -e "  ${CYAN}pydroidb${ENDC} [OPTIONS]"
+    echo ""
+    echo -e "${BOLD}OPTIONS:${ENDC}"
+    echo -e "  ${GREEN}(none)${ENDC}         Launch interactive menu"
+    echo -e "  ${GREEN}--help, -h${ENDC}     Show this help message"
+    echo -e "  ${GREEN}--version, -v${ENDC}  Show version information"
+    echo -e "  ${GREEN}--install${ENDC}      Install PyDroidb system-wide"
+    echo -e "  ${GREEN}--uninstall${ENDC}    Remove system-wide installation"
+    echo -e "  ${GREEN}--check-deps${ENDC}   Check and install dependencies only"
+    echo ""
+    echo -e "${BOLD}FEATURES:${ENDC}"
+    echo -e "  • Complete ADB & Fastboot operations"
+    echo -e "  • GSI (Generic System Image) flashing support"
+    echo -e "  • Samsung device support (Odin4/Heimdall)"
+    echo -e "  • MediaTek device recovery"
+    echo -e "  • File management & APK installation"
+    echo -e "  • System operations & debugging"
+    echo -e "  • Custom recovery & firmware flashing"
+    echo -e "  • Screenshot & screen recording"
+    echo -e "  • Device backup & restore"
+    echo ""
+    echo -e "${BOLD}EXAMPLES:${ENDC}"
+    echo -e "  ${CYAN}pydroidb${ENDC}              # Start interactive mode"
+    echo -e "  ${CYAN}pydroidb --install${ENDC}    # Install system-wide"
+    echo -e "  ${CYAN}sudo pydroidb${ENDC}         # Run with elevated privileges"
+    echo ""
+    echo -e "${BOLD}DOCUMENTATION:${ENDC}"
+    echo -e "  ${BLUE}https://github.com/0xb0rn3/pydroidb${ENDC}"
+}
+
+# Core utility functions
+clear_screen() {
+    clear
+}
+
+display_info() {
+    echo -e "${BOLD}${BLUE}PyDroidb: ADB, Fastboot, GSI & Samsung Automation Tool v${VERSION}${ENDC}"
+    echo -e "${GREEN}Author: 0xbv1 | 0xb0rn3${ENDC}"
+    echo -e "${GREEN}GitHub: https://github.com/0xb0rn3/pydroidb${ENDC}"
+    echo -e "${GREEN}Platform: $(uname -s) $(uname -m)${ENDC}"
+    
+    check_installation
+    case $? in
+        0) echo -e "${GREEN}Installation: System-wide (/usr/bin/pydroidb)${ENDC}" ;;
+        1) echo -e "${YELLOW}Installation: System-wide (different version)${ENDC}" ;;
+        2) echo -e "${YELLOW}Installation: Local only - run with --install for system-wide${ENDC}" ;;
+    esac
+    
+    echo -e "${YELLOW}Samsung Support: Odin4 + Heimdall Integrated${ENDC}"
+    echo -e "${CYAN}GSI Support: MediaTek & Qualcomm Recovery${ENDC}"
+    echo -e "${RED}${BOLD}============================[ SAFETY WARNING ]============================${ENDC}"
+    echo -e "${RED}This tool modifies device firmware and can cause permanent damage if used incorrectly.${ENDC}"
+    echo -e "${RED}Samsung operations may void warranty and trigger Knox security features.${ENDC}"
+    echo -e "${RED}GSI flashing requires unlocked bootloader and may brick your device.${ENDC}"
+    echo -e "${RED}Always back up data and have official recovery images. USE AT YOUR OWN RISK.${ENDC}"
+    echo -e "${RED}${BOLD}=========================================================================${ENDC}"
+    read -p "Press Enter to continue..."
 }
 
 install_dependencies() {
@@ -737,7 +1017,6 @@ setup_samsung_drivers() {
     
     echo -e "${BLUE}Setting up Samsung device drivers...${ENDC}"
     
-    # Create udev rules for Samsung devices
     UDEV_FILE="/etc/udev/rules.d/51-android-samsung.rules"
     if [[ ! -f "$UDEV_FILE" ]] || ! grep -q "04e8" "$UDEV_FILE" 2>/dev/null; then
         echo -e "${BLUE}Creating Samsung udev rules...${ENDC}"
@@ -756,7 +1035,6 @@ EOF
         echo -e "${GREEN}Samsung udev rules created.${ENDC}"
     fi
     
-    # Add user to plugdev group
     if ! groups $USER | grep -q plugdev 2>/dev/null; then
         echo -e "${BLUE}Adding user to plugdev group...${ENDC}"
         sudo usermod -a -G plugdev $USER 2>/dev/null
@@ -847,7 +1125,6 @@ detect_samsung_download_mode() {
     
     SAMSUNG_DEVICES=()
     
-    # Try Odin4 detection first
     if [[ $ODIN4_INSTALLED == true ]]; then
         echo -e "${BLUE}Checking with Odin4...${ENDC}"
         if sudo odin4 --detect 2>/dev/null | grep -q "Device detected"; then
@@ -855,7 +1132,6 @@ detect_samsung_download_mode() {
         fi
     fi
     
-    # Try Heimdall detection
     if [[ $HEIMDALL_INSTALLED == true ]]; then
         echo -e "${BLUE}Checking with Heimdall...${ENDC}"
         if heimdall detect 2>/dev/null | grep -q "Device detected"; then
@@ -863,7 +1139,6 @@ detect_samsung_download_mode() {
         fi
     fi
     
-    # Manual USB detection fallback
     if command -v lsusb &>/dev/null; then
         USB_SAMSUNG=$(lsusb 2>/dev/null | grep "04e8:")
         if [[ -n "$USB_SAMSUNG" ]]; then
@@ -892,7 +1167,6 @@ detect_samsung_download_mode() {
 check_requirements() {
     echo -e "${BLUE}Checking requirements...${ENDC}"
     
-    # Check for core Android tools
     if ! command -v adb &>/dev/null || ! command -v fastboot &>/dev/null; then
         echo -e "${BLUE}Installing Android SDK Platform-Tools...${ENDC}"
         install_dependencies
@@ -911,21 +1185,18 @@ check_requirements() {
         $ADB start-server &>/dev/null && echo -e "${GREEN}ADB server started.${ENDC}"
     fi
     
-    # Setup Samsung support
     setup_samsung_drivers
     
-    # Install Samsung tools
     echo -e "${BLUE}Setting up Samsung tools...${ENDC}"
     install_odin4
     install_heimdall
     
-    # Summary
-    echo -e "${GREEN}┌─────────────────────────────────────────────────────────────┐${ENDC}"
-    echo -e "${GREEN}│ Tool Status Summary:                                        │${ENDC}"
-    echo -e "│ ADB/Fastboot: ${GREEN}✓ Installed${ENDC}                                    │"
-    [[ $ODIN4_INSTALLED == true ]] && echo -e "│ Odin4: ${GREEN}✓ Installed${ENDC}                                           │" || echo -e "│ Odin4: ${RED}✗ Not Available${ENDC}                                     │"
-    [[ $HEIMDALL_INSTALLED == true ]] && echo -e "│ Heimdall: ${GREEN}✓ Installed${ENDC}                                        │" || echo -e "│ Heimdall: ${RED}✗ Not Available${ENDC}                                  │"
-    echo -e "${GREEN}└─────────────────────────────────────────────────────────────┘${ENDC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════${ENDC}"
+    echo -e "${GREEN}Tool Status Summary:${ENDC}"
+    echo -e "ADB/Fastboot: ${GREEN}✓ Installed${ENDC}"
+    [[ $ODIN4_INSTALLED == true ]] && echo -e "Odin4: ${GREEN}✓ Installed${ENDC}" || echo -e "Odin4: ${RED}✗ Not Available${ENDC}"
+    [[ $HEIMDALL_INSTALLED == true ]] && echo -e "Heimdall: ${GREEN}✓ Installed${ENDC}" || echo -e "Heimdall: ${RED}✗ Not Available${ENDC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════${ENDC}"
 }
 
 get_device_info() {
@@ -966,7 +1237,12 @@ get_device_info() {
     KERNEL_VERSION=$($ADB -s $SERIAL shell cat /proc/version 2>/dev/null | tr -d '\r')
     MANUFACTURER=$($ADB -s $SERIAL shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r')
     ARCHITECTURE=$($ADB -s $SERIAL shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
-    DEVICE_INFO="serial=$SERIAL model=$MODEL android_version=$ANDROID_VERSION sdk_version=$SDK_VERSION bootloader_version=$BOOTLOADER_VERSION kernel_version=$KERNEL_VERSION manufacturer=$MANUFACTURER architecture=$ARCHITECTURE state=$STATE"
+    
+    # Check for GSI/Treble support
+    TREBLE_ENABLED=$($ADB -s $SERIAL shell getprop ro.treble.enabled 2>/dev/null | tr -d '\r')
+    AB_UPDATE=$($ADB -s $SERIAL shell getprop ro.build.ab_update 2>/dev/null | tr -d '\r')
+    
+    DEVICE_INFO="serial=$SERIAL model=$MODEL android_version=$ANDROID_VERSION sdk_version=$SDK_VERSION bootloader_version=$BOOTLOADER_VERSION kernel_version=$KERNEL_VERSION manufacturer=$MANUFACTURER architecture=$ARCHITECTURE state=$STATE treble=$TREBLE_ENABLED ab_update=$AB_UPDATE"
     echo -e "${GREEN}Device info gathered.${ENDC}"
 }
 
@@ -988,6 +1264,20 @@ display_device_info() {
     echo -e "${BOLD}Bootloader:${ENDC}       $(echo $DEVICE_INFO | grep -oP 'bootloader_version=\K[^ ]+')"
     echo -e "${BOLD}Kernel:${ENDC}           $(echo $DEVICE_INFO | grep -oP 'kernel_version=\K.+')"
     echo -e "${BOLD}State:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')"
+    
+    # GSI/Treble info
+    TREBLE=$(echo $DEVICE_INFO | grep -oP 'treble=\K[^ ]+')
+    AB=$(echo $DEVICE_INFO | grep -oP 'ab_update=\K[^ ]+')
+    if [[ "$TREBLE" == "true" ]]; then
+        echo -e "${BOLD}Treble:${ENDC}           ${GREEN}Supported (GSI Compatible)${ENDC}"
+    else
+        echo -e "${BOLD}Treble:${ENDC}           ${RED}Not Supported${ENDC}"
+    fi
+    if [[ "$AB" == "true" ]]; then
+        echo -e "${BOLD}A/B Partition:${ENDC}    ${GREEN}Yes (Seamless Updates)${ENDC}"
+    else
+        echo -e "${BOLD}A/B Partition:${ENDC}    No (A-only)"
+    fi
     echo "=================================================="
     read -p "Press Enter to return..."
 }
@@ -1020,242 +1310,6 @@ run_command() {
         echo -e "${RED}Error: $OUTPUT${ENDC}"
         return $STATUS
     fi
-}
-
-# GSI (Generic System Image) Flash Operations
-flash_gsi() {
-    clear_screen
-    echo -e "${BOLD}${GREEN}📲 GSI (Generic System Image) Flash${ENDC}"
-    echo -e "${YELLOW}Compatible with ARM64 A/B devices (MediaTek, Qualcomm, etc.)${ENDC}"
-    echo "========================================================="
-    
-    # Check if device is in fastboot mode
-    FASTBOOT_DEVICES=$($FASTBOOT devices 2>/dev/null)
-    if [[ -z "$FASTBOOT_DEVICES" ]]; then
-        echo -e "${RED}No device detected in fastboot mode.${ENDC}"
-        echo -e "${YELLOW}To enter fastboot mode:${ENDC}"
-        echo -e "${YELLOW}1. Power off device completely${ENDC}"
-        echo -e "${YELLOW}2. Hold Volume Up + Power button${ENDC}"
-        echo -e "${YELLOW}3. Connect USB cable${ENDC}"
-        read -p "Press Enter when device is in fastboot mode..."
-        
-        # Recheck fastboot devices
-        FASTBOOT_DEVICES=$($FASTBOOT devices 2>/dev/null)
-        if [[ -z "$FASTBOOT_DEVICES" ]]; then
-            echo -e "${RED}Still no fastboot device detected. Aborting.${ENDC}"
-            return 1
-        fi
-    fi
-    
-    echo -e "${GREEN}Fastboot device detected.${ENDC}"
-    
-    # Get device partition info
-    echo -e "${BLUE}Checking device partition layout...${ENDC}"
-    PARTITION_INFO=$($FASTBOOT getvar all 2>&1 | grep -E "(partition-|slot-|has-slot)")
-    
-    # Check for A/B support
-    AB_SUPPORT=$(echo "$PARTITION_INFO" | grep -c "has-slot:.*yes")
-    VBMETA_SLOTS=$(echo "$PARTITION_INFO" | grep "has-slot:vbmeta" | grep -c "yes")
-    
-    if [[ $AB_SUPPORT -gt 0 ]]; then
-        echo -e "${GREEN}A/B partition device detected.${ENDC}"
-        CURRENT_SLOT=$($FASTBOOT getvar current-slot 2>&1 | grep "current-slot:" | awk '{print $2}')
-        echo -e "${BLUE}Current active slot: ${BOLD}$CURRENT_SLOT${ENDC}"
-    else
-        echo -e "${YELLOW}Non-A/B device detected.${ENDC}"
-    fi
-    
-    # GSI file selection
-    read -p "Path to GSI image file (.img): " GSI_PATH
-    if [[ ! -f "$GSI_PATH" ]]; then
-        echo -e "${RED}GSI file not found: $GSI_PATH${ENDC}"
-        return 1
-    fi
-    
-    # Stock vbmeta files (optional but recommended)
-    echo -e "${BLUE}Stock vbmeta files help fix verification issues.${ENDC}"
-    read -p "Path to stock vbmeta.img (optional, press Enter to skip): " STOCK_VBMETA
-    read -p "Path to stock vbmeta_system.img (optional, press Enter to skip): " STOCK_VBMETA_SYSTEM
-    read -p "Path to stock vbmeta_vendor.img (optional, press Enter to skip): " STOCK_VBMETA_VENDOR
-    
-    # Display summary
-    echo -e "\n${BOLD}${GREEN}GSI Flash Summary:${ENDC}"
-    echo "=============================="
-    echo -e "GSI File: ${BOLD}$(basename "$GSI_PATH")${ENDC}"
-    echo -e "File Size: ${BOLD}$(du -h "$GSI_PATH" 2>/dev/null | cut -f1)${ENDC}"
-    [[ -n "$STOCK_VBMETA" ]] && echo -e "Stock vbmeta: ${BOLD}$(basename "$STOCK_VBMETA")${ENDC}"
-    [[ -n "$STOCK_VBMETA_SYSTEM" ]] && echo -e "Stock vbmeta_system: ${BOLD}$(basename "$STOCK_VBMETA_SYSTEM")${ENDC}"
-    [[ -n "$STOCK_VBMETA_VENDOR" ]] && echo -e "Stock vbmeta_vendor: ${BOLD}$(basename "$STOCK_VBMETA_VENDOR")${ENDC}"
-    echo -e "Device Type: ${BOLD}$([[ $AB_SUPPORT -gt 0 ]] && echo "A/B Partition" || echo "Non-A/B")${ENDC}"
-    echo "=============================="
-    
-    # Critical warnings
-    echo -e "\n${RED}${BOLD}⚠️ CRITICAL GSI FLASH WARNINGS ⚠️${ENDC}"
-    echo -e "${RED}• GSI flashing can brick your device if done incorrectly${ENDC}"
-    echo -e "${RED}• Always have stock firmware ready for recovery${ENDC}"
-    echo -e "${RED}• This will replace your current system${ENDC}"
-    echo -e "${RED}• vbmeta verification must be handled properly${ENDC}"
-    echo -e "${YELLOW}• Recommended for experienced users only${ENDC}"
-    
-    confirm_action "Proceed with GSI flash?" || return
-    confirm_action "FINAL CONFIRMATION - Flash GSI and modify vbmeta?" || return
-    
-    # Begin GSI flash process
-    echo -e "\n${BLUE}Starting GSI flash process...${ENDC}"
-    
-    # Step 1: Flash stock vbmeta files if provided (fixes verification chain)
-    if [[ -n "$STOCK_VBMETA" ]]; then
-        echo -e "${BLUE}Step 1: Restoring stock vbmeta files...${ENDC}"
-        
-        if [[ $VBMETA_SLOTS -gt 0 ]]; then
-            # A/B device with vbmeta slots
-            echo -e "${BLUE}Flashing stock vbmeta to both slots...${ENDC}"
-            run_command "$FASTBOOT flash vbmeta_a \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT flash vbmeta_b \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-            
-            [[ -n "$STOCK_VBMETA_SYSTEM" ]] && run_command "$FASTBOOT flash vbmeta_system_a \"$STOCK_VBMETA_SYSTEM\"" $FASTBOOT_TIMEOUT
-            [[ -n "$STOCK_VBMETA_SYSTEM" ]] && run_command "$FASTBOOT flash vbmeta_system_b \"$STOCK_VBMETA_SYSTEM\"" $FASTBOOT_TIMEOUT
-            
-            [[ -n "$STOCK_VBMETA_VENDOR" ]] && run_command "$FASTBOOT flash vbmeta_vendor_a \"$STOCK_VBMETA_VENDOR\"" $FASTBOOT_TIMEOUT
-            [[ -n "$STOCK_VBMETA_VENDOR" ]] && run_command "$FASTBOOT flash vbmeta_vendor_b \"$STOCK_VBMETA_VENDOR\"" $FASTBOOT_TIMEOUT
-        else
-            # Non-A/B or different partition scheme
-            run_command "$FASTBOOT flash vbmeta \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-            [[ -n "$STOCK_VBMETA_SYSTEM" ]] && run_command "$FASTBOOT flash vbmeta_system \"$STOCK_VBMETA_SYSTEM\"" $FASTBOOT_TIMEOUT
-            [[ -n "$STOCK_VBMETA_VENDOR" ]] && run_command "$FASTBOOT flash vbmeta_vendor \"$STOCK_VBMETA_VENDOR\"" $FASTBOOT_TIMEOUT
-        fi
-    fi
-    
-    # Step 2: Flash GSI to system partition
-    echo -e "${BLUE}Step 2: Flashing GSI to system partition...${ENDC}"
-    if [[ $AB_SUPPORT -gt 0 ]]; then
-        # A/B device - flash to system_a or current slot
-        TARGET_SLOT="${CURRENT_SLOT:-a}"
-        echo -e "${BLUE}Flashing GSI to system_${TARGET_SLOT}...${ENDC}"
-        run_command "$FASTBOOT flash system_${TARGET_SLOT} \"$GSI_PATH\"" $FASTBOOT_TIMEOUT
-    else
-        # Non-A/B device
-        run_command "$FASTBOOT flash system \"$GSI_PATH\"" $FASTBOOT_TIMEOUT
-    fi
-    
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}GSI flash failed. Check device and try again.${ENDC}"
-        return 1
-    fi
-    
-    # Step 3: Disable vbmeta verification for GSI compatibility
-    echo -e "${BLUE}Step 3: Disabling vbmeta verification for GSI compatibility...${ENDC}"
-    
-    if [[ -n "$STOCK_VBMETA" ]]; then
-        # Use stock vbmeta but disable verification
-        if [[ $VBMETA_SLOTS -gt 0 ]]; then
-            run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_a \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta_b \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-        else
-            run_command "$FASTBOOT --disable-verity --disable-verification flash vbmeta \"$STOCK_VBMETA\"" $FASTBOOT_TIMEOUT
-        fi
-    else
-        # Create a minimal disabled vbmeta if no stock file provided
-        echo -e "${YELLOW}No stock vbmeta provided. Creating disabled vbmeta...${ENDC}"
-        TEMP_VBMETA="/tmp/vbmeta_disabled.img"
-        dd if=/dev/zero of="$TEMP_VBMETA" bs=8192 count=1 2>/dev/null
-        
-        if [[ $VBMETA_SLOTS -gt 0 ]]; then
-            run_command "$FASTBOOT flash vbmeta_a \"$TEMP_VBMETA\"" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT flash vbmeta_b \"$TEMP_VBMETA\"" $FASTBOOT_TIMEOUT
-        else
-            run_command "$FASTBOOT flash vbmeta \"$TEMP_VBMETA\"" $FASTBOOT_TIMEOUT
-        fi
-        
-        rm -f "$TEMP_VBMETA"
-    fi
-    
-    # Step 4: Format userdata (essential for GSI)
-    echo -e "${BLUE}Step 4: Formatting userdata for clean GSI boot...${ENDC}"
-    run_command "$FASTBOOT format userdata" $FASTBOOT_TIMEOUT
-    
-    if [[ $? -ne 0 ]]; then
-        echo -e "${YELLOW}Userdata format failed, trying alternative methods...${ENDC}"
-        # Try alternative userdata clearing methods
-        run_command "$FASTBOOT erase userdata" $DEFAULT_TIMEOUT
-        run_command "$FASTBOOT erase data" $DEFAULT_TIMEOUT
-        run_command "$FASTBOOT -w" $FASTBOOT_TIMEOUT
-    fi
-    
-    # Step 5: Set active slot if A/B device
-    if [[ $AB_SUPPORT -gt 0 && -n "$CURRENT_SLOT" ]]; then
-        echo -e "${BLUE}Step 5: Setting active slot to ${CURRENT_SLOT}...${ENDC}"
-        run_command "$FASTBOOT --set-active=$CURRENT_SLOT" $DEFAULT_TIMEOUT
-    fi
-    
-    # Step 6: Final reboot
-    echo -e "${BLUE}Step 6: Rebooting device...${ENDC}"
-    run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT
-    
-    # Success message
-    echo -e "\n${GREEN}${BOLD}✅ GSI FLASH COMPLETED SUCCESSFULLY!${ENDC}"
-    echo -e "${GREEN}Your device should now boot into the GSI.${ENDC}"
-    echo -e "${YELLOW}First boot may take 5-10 minutes. Be patient.${ENDC}"
-    echo -e "${BLUE}If device doesn't boot, use stock firmware recovery.${ENDC}"
-    
-    # Post-flash recommendations
-    echo -e "\n${BOLD}${GREEN}Post-Flash Recommendations:${ENDC}"
-    echo "• Wait for complete first boot before making changes"
-    echo "• Install Magisk for root if needed"
-    echo "• Configure Google Services if GSI doesn't include them"
-    echo "• Test all hardware functions (camera, sensors, etc.)"
-    echo "• Keep stock firmware files for emergency recovery"
-    
-    return 0
-}
-
-# Recovery function for GSI flash failures
-gsi_recovery_mode() {
-    echo -e "${BOLD}${RED}🚨 GSI RECOVERY MODE${ENDC}"
-    echo -e "${RED}Use this if GSI flash failed or device won't boot${ENDC}"
-    echo "================================================="
-    
-    # Check fastboot connectivity
-    if [[ -z "$($FASTBOOT devices 2>/dev/null)" ]]; then
-        echo -e "${RED}Device not detected in fastboot mode.${ENDC}"
-        return 1
-    fi
-    
-    echo "Recovery Options:"
-    echo "1. Flash stock firmware (recommended)"
-    echo "2. Try alternative vbmeta disable"
-    echo "3. Wipe and format all user partitions"
-    echo "4. Emergency bootloader unlock"
-    echo "5. Cancel"
-    
-    read -p "Select recovery option: " CHOICE
-    
-    case $CHOICE in
-        1)
-            echo -e "${BLUE}Please use SP Flash Tool or stock firmware flash method${ENDC}"
-            echo -e "${BLUE}Stock firmware files should be available in your original firmware folder${ENDC}"
-            ;;
-        2)
-            echo -e "${BLUE}Attempting alternative vbmeta disable...${ENDC}"
-            TEMP_VBMETA="/tmp/vbmeta_empty.img"
-            echo -en '\x00AVBf\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00' > "$TEMP_VBMETA"
-            run_command "$FASTBOOT flash vbmeta_a \"$TEMP_VBMETA\"" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT flash vbmeta_b \"$TEMP_VBMETA\"" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT reboot" $DEFAULT_TIMEOUT
-            rm -f "$TEMP_VBMETA"
-            ;;
-        3)
-            confirm_action "Wipe all user data partitions?" || return
-            run_command "$FASTBOOT -w" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT format userdata" $FASTBOOT_TIMEOUT
-            run_command "$FASTBOOT format data" $FASTBOOT_TIMEOUT
-            ;;
-        4)
-            confirm_action "Emergency bootloader unlock (wipes device)?" || return
-            run_command "$FASTBOOT flashing unlock" $DEFAULT_TIMEOUT
-            ;;
-        5) return ;;
-    esac
 }
 
 # File operations
@@ -1440,4 +1494,3 @@ pull_kernel() {
     else
         echo -e "${RED}Failed to pull kernel info.${ENDC}"
     fi
-}
