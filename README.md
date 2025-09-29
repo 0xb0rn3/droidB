@@ -235,7 +235,7 @@ SAMSUNG_VERIFY_FLASH=true
 ### Complete Firmware Flash
 ```bash
 # Interactive mode with drag & drop
-droidb --samsung
+droidB --samsung
 # Select option 1: Flash Complete Firmware
 # Drag & drop BL, AP, CP, CSC files when prompted
 ```
