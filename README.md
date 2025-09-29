@@ -55,20 +55,20 @@ git clone https://github.com/0xb0rn3/droidB.git
 cd droidB
 
 # Make executable
-chmod +x droidb
+chmod +x droidB
 
 # Run the tool
-./droidb
+./droidB
 ```
 
 ### System-Wide Installation
 
 ```bash
 # Install system-wide (recommended)
-sudo ./droidb --install
+sudo ./droidB --install
 
 # Now run from anywhere
-droidb
+droidB
 ```
 
 ### Samsung Tools Installation
@@ -86,25 +86,25 @@ The tool automatically installs required Samsung utilities:
 
 ```bash
 # Standard execution
-./droidb
+./droidB
 
 # With verbose output
-./droidb --verbose
+./droidB --verbose
 
 # Samsung-specific mode
-./droidb --samsung
+./droidB --samsung
 
 # Direct fastboot access
-./droidb --fastboot
+./droidB --fastboot
 
 # Open ADB shell directly
-./droidb --shell
+./droidB --shell
 
 # Check version
-./droidb --version
+./droidB --version
 
 # Show help
-./droidb --help
+./droidB --help
 ```
 
 ### Device Preparation
@@ -198,7 +198,7 @@ export SAMSUNG_NAND_TIMEOUT=3600
 
 ### Device Profiles
 
-Create `.droidb_config` for custom settings:
+Create `.droidB_config` for custom settings:
 
 ```bash
 # Device-specific Samsung configurations
@@ -243,7 +243,7 @@ droidb --samsung
 ### Custom Recovery Installation
 ```bash
 # Direct Samsung menu access
-droidb --samsung
+droidB --samsung
 # Select option 2: Flash Custom Recovery
 # Drag & drop TWRP/CWM image file
 ```
@@ -251,7 +251,7 @@ droidb --samsung
 ### File Management
 ```bash
 # Launch file explorer
-droidb
+droidB
 # Select option 2: File Explorer (Visual)
 # Navigate with numbers, drag & drop files to push
 ```
@@ -259,7 +259,7 @@ droidb
 ### Fastboot Operations
 ```bash
 # Direct fastboot access
-droidb --fastboot
+droidB --fastboot
 # Follow on-screen menu for flashing, unlocking, etc.
 ```
 
@@ -268,14 +268,14 @@ droidb --fastboot
 ### Download Mode Issues
 ```bash
 # Check Samsung drivers
-droidb --samsung
+droidB --samsung
 # Select option 4: Detect Samsung Devices
 
 # Test download mode connection
 sudo odin4 --detect
 
 # Reinstall drivers
-droidb
+droidB
 # Select option 0: Settings & Tools
 # Select option 3: Setup udev rules
 ```
@@ -319,7 +319,7 @@ droidb
 ### Visual File Explorer
 ```bash
 # Interactive device file browser
-droidb
+droidB
 # Select option 2: File Explorer (Visual)
 
 Features:
@@ -335,7 +335,7 @@ Features:
 ### Batch Operations
 ```bash
 # Batch push directory
-droidb
+droidB
 # Select option 3: File Operations
 # Select option 3: Batch Push Directory
 
@@ -438,11 +438,11 @@ We welcome contributions, especially for Samsung device support!
 ```bash
 git clone https://github.com/0xb0rn3/droidB.git
 cd droidB
-chmod +x droidb
+chmod +x droidB
 
 # Test Samsung features
-./droidb --test-samsung
-./droidb --samsung --dry-run
+./droidB --test-samsung
+./droidB --samsung --dry-run
 ```
 
 ### Adding New Samsung Models
@@ -516,18 +516,18 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Essential Commands
 ```bash
 # Installation
-sudo ./droidb --install
+sudo ./droidB --install
 
 # Check version
-droidb --version
+droidB --version
 
 # Show help
-droidb --help
+droidB --help
 
 # Direct modes
-droidb --samsung        # Samsung operations
-droidb --fastboot       # Fastboot operations
-droidb --shell          # ADB shell
+droidB --samsung        # Samsung operations
+droidB --fastboot       # Fastboot operations
+droidB --shell          # ADB shell
 
 # Check device
 adb devices
@@ -537,27 +537,27 @@ fastboot devices
 ### Samsung Quick Commands
 ```bash
 # List Samsung download mode devices
-droidb --samsung
+droidB --samsung
 # Select option 4
 
 # Flash complete firmware
-droidb --samsung
+droidB --samsung
 # Select option 1
 
 # Install custom recovery
-droidb --samsung
+droidB --samsung
 # Select option 2
 
 # Check bootloader status
 # Enter download mode first
-droidb --samsung
+droidB --samsung
 ```
 
 ### Emergency Procedures
 ```bash
 # Soft brick recovery
 1. Boot to download mode
-2. droidb --samsung
+2. droidB --samsung
 3. Flash stock firmware
 
 # Hard brick prevention
