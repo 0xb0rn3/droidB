@@ -1,0 +1,1571 @@
+#!/usr/bin/env bash
+
+# droidB - Advanced Android & Samsung Device Management Tool
+# Version: 0.1.1
+# Author: 0xbv1 | 0xb0rn3
+# GitHub: https://github.com/0xb0rn3/droidB
+# License: MIT
+
+set -uo pipefail  # Removed 'e' flag to handle errors more gracefully
+
+VERSION="0.1.1 Latest | Stable"
+SCRIPT_NAME="droidB"
+INSTALL_DIR="/usr/local/bin"
+
+# Color definitions
+BLUE='\033[94m'
+GREEN='\033[92m'
+RED='\033[91m'
+YELLOW='\033[93m'
+MAGENTA='\033[95m'
+CYAN='\033[96m'
+BOLD='\033[1m'
+ENDC='\033[0m'
+
+# Timeout configurations
+DEFAULT_TIMEOUT=60
+FILE_TIMEOUT=300
+BACKUP_TIMEOUT=3600
+FASTBOOT_TIMEOUT=600
+SAMSUNG_FLASH_TIMEOUT=1800
+SAMSUNG_PIT_TIMEOUT=300
+SAMSUNG_NAND_TIMEOUT=3600
+
+# Global variables - Initialize to prevent unbound errors
+SAMSUNG_VENDOR_ID="04e8"
+ODIN4_INSTALLED=false
+HEIMDALL_INSTALLED=false
+DEVICE_EXPLORER_MODE=false
+CURRENT_DEVICE_PATH="/sdcard"
+DRAG_DROP_ENABLED=true
+DIRECT_FASTBOOT=false
+DIRECT_SAMSUNG=false
+DIRECT_SHELL=false
+SERIAL=""
+ADB=""
+FASTBOOT=""
+DEVICE_INFO=""
+
+# Installation function
+install_systemwide() {
+    echo -e "${BOLD}${GREEN}droidB System-Wide Installation${ENDC}"
+    echo -e "${BLUE}Installing droidB to $INSTALL_DIR...${ENDC}"
+    
+    # Check if running as root for installation
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${YELLOW}Root privileges required for system installation.${ENDC}"
+        echo -e "${BLUE}Attempting sudo installation...${ENDC}"
+        
+        # Self-elevate with sudo
+        sudo cp "$0" "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null || {
+            echo -e "${RED}Failed to install. Please run: sudo $0 --install${ENDC}"
+            exit 1
+        }
+        sudo chmod +x "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null
+        
+        # Create symbolic link for convenience
+        sudo ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "/usr/bin/$SCRIPT_NAME" 2>/dev/null || true
+        
+        echo -e "${GREEN}✓ droidB installed successfully!${ENDC}"
+        echo -e "${GREEN}You can now run it from anywhere with: ${BOLD}$SCRIPT_NAME${ENDC}"
+    else
+        # Running as root
+        cp "$0" "$INSTALL_DIR/$SCRIPT_NAME"
+        chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+        ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "/usr/bin/$SCRIPT_NAME" 2>/dev/null || true
+        
+        echo -e "${GREEN}✓ droidB installed successfully!${ENDC}"
+        echo -e "${GREEN}You can now run it from anywhere with: ${BOLD}$SCRIPT_NAME${ENDC}"
+    fi
+    
+    # Create desktop entry for GUI launchers
+    create_desktop_entry
+    
+    # Setup completion
+    setup_bash_completion
+    
+    echo -e "${CYAN}Installation complete! Features:${ENDC}"
+    echo -e "  • System-wide access: run '$SCRIPT_NAME' from anywhere"
+    echo -e "  • Drag & drop support for file paths"
+    echo -e "  • Tab completion enabled"
+    echo -e "  • Desktop launcher created (if GUI available)"
+    
+    exit 0
+}
+
+create_desktop_entry() {
+    if [[ -d "/usr/share/applications" ]]; then
+        cat > /tmp/droidb.desktop << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=droidB
+Comment=Advanced Android & Samsung Device Manager
+Exec=$INSTALL_DIR/$SCRIPT_NAME
+Icon=android
+Terminal=true
+Categories=Development;Utility;
+Keywords=android;adb;fastboot;samsung;odin;
+EOF
+        sudo mv /tmp/droidb.desktop /usr/share/applications/ 2>/dev/null || true
+        echo -e "${GREEN}Desktop entry created${ENDC}"
+    fi
+}
+
+setup_bash_completion() {
+    COMPLETION_SCRIPT="/etc/bash_completion.d/droidb"
+    if [[ -d "/etc/bash_completion.d" ]]; then
+        cat > /tmp/droidb_completion << 'EOF'
+_droidb() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="--help --version --install --uninstall --device --fastboot --samsung --shell"
+    
+    if [[ ${cur} == -* ]] ; then
+        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+        return 0
+    fi
+}
+complete -F _droidb droidb
+EOF
+        sudo mv /tmp/droidb_completion "$COMPLETION_SCRIPT" 2>/dev/null || true
+        echo -e "${GREEN}Bash completion installed${ENDC}"
+    fi
+}
+
+# Uninstall function
+uninstall_systemwide() {
+    echo -e "${BOLD}${RED}droidB Uninstallation${ENDC}"
+    
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${YELLOW}Root privileges required for uninstallation.${ENDC}"
+        sudo "$0" --uninstall
+        exit 0
+    fi
+    
+    # Remove files
+    rm -f "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null
+    rm -f "/usr/bin/$SCRIPT_NAME" 2>/dev/null
+    rm -f "/usr/share/applications/droidb.desktop" 2>/dev/null
+    rm -f "/etc/bash_completion.d/droidb" 2>/dev/null
+    
+    echo -e "${GREEN}droidB uninstalled successfully.${ENDC}"
+    exit 0
+}
+
+# Command line argument parsing
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --install)
+                install_systemwide
+                ;;
+            --uninstall)
+                uninstall_systemwide
+                ;;
+            --version|-v)
+                echo "droidB version $VERSION"
+                exit 0
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            --device|-d)
+                shift
+                SERIAL="$1"
+                ;;
+            --fastboot|-f)
+                DIRECT_FASTBOOT=true
+                ;;
+            --samsung|-s)
+                DIRECT_SAMSUNG=true
+                ;;
+            --shell)
+                DIRECT_SHELL=true
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${ENDC}"
+                show_help
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+show_help() {
+    cat << EOF
+${BOLD}${BLUE}droidB v$VERSION - Advanced Android & Samsung Device Manager${ENDC}
+
+${BOLD}USAGE:${ENDC}
+    $SCRIPT_NAME [OPTIONS]
+
+${BOLD}OPTIONS:${ENDC}
+    --install           Install droidB system-wide
+    --uninstall         Remove droidB from system
+    --version, -v       Show version information
+    --help, -h          Show this help message
+    --device, -d        Specify device serial
+    --fastboot, -f      Jump directly to fastboot menu
+    --samsung, -s       Jump directly to Samsung menu
+    --shell             Open ADB shell directly
+
+${BOLD}FEATURES:${ENDC}
+    • Full ADB/Fastboot automation
+    • Samsung device support (Odin4 + Heimdall)
+    • Visual file explorer with drag & drop
+    • Batch operations and backups
+    • Security-focused design
+
+${BOLD}EXAMPLES:${ENDC}
+    $SCRIPT_NAME                    # Start interactive mode
+    $SCRIPT_NAME --install          # Install system-wide
+    $SCRIPT_NAME --device SERIAL    # Connect to specific device
+    $SCRIPT_NAME --fastboot         # Jump to fastboot operations
+
+${BOLD}AUTHOR:${ENDC}
+    0xbv1 | 0xb0rn3
+    https://github.com/0xb0rn3/droidB
+
+EOF
+}
+
+clear_screen() {
+    clear
+    echo -ne "\033]0;droidB v$VERSION\007"  # Set terminal title
+}
+
+display_banner() {
+    clear_screen
+    echo -e "${CYAN}"
+    cat << 'EOF'
+    ╔══════════════════════════════════════════════════════════╗
+    ║                                                          ║
+    ║     ██████╗ ██████╗  ██████╗ ██╗██████╗ ██████╗        ║
+    ║     ██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔══██╗       ║
+    ║     ██║  ██║██████╔╝██║   ██║██║██║  ██║██████╔╝       ║
+    ║     ██║  ██║██╔══██╗██║   ██║██║██║  ██║██╔══██╗       ║
+    ║     ██████╔╝██║  ██║╚██████╔╝██║██████╔╝██████╔╝       ║
+    ║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║
+    ║                                                          ║
+    ╚══════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${ENDC}"
+    echo -e "${BOLD}${BLUE}    Advanced Android & Samsung Device Manager v${VERSION}${ENDC}"
+    echo -e "${GREEN}    Security-Focused | Drag & Drop | System Integration${ENDC}"
+    echo -e "${MAGENTA}    Developer: ${BOLD}0xbv1 | 0xb0rn3${ENDC}"
+    echo -e "${CYAN}    GitHub: ${BOLD}https://github.com/0xb0rn3/droidB${ENDC}"
+    echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
+}
+
+# Enhanced path processing for drag & drop
+process_path() {
+    local input="$1"
+    # Remove quotes and escape characters from drag & drop
+    input="${input#\'}"
+    input="${input%\'}"
+    input="${input#\"}"
+    input="${input%\"}"
+    # Handle spaces in paths
+    input="${input//\\ / }"
+    # Expand tilde to home directory
+    input="${input/#\~/$HOME}"
+    echo "$input"
+}
+
+# Device file explorer with visual navigation
+device_file_explorer() {
+    local current_path="${1:-/sdcard}"
+    local selected_file=""
+    
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${CYAN}📱 DEVICE FILE EXPLORER${ENDC}"
+        echo -e "${GREEN}Current Path: ${BOLD}$current_path${ENDC}"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
+        
+        # List directory contents with details
+        echo -e "${BLUE}Fetching directory contents...${ENDC}"
+        local contents=$($ADB -s $SERIAL shell ls -la "$current_path" 2>/dev/null | tail -n +2)
+        
+        if [[ -z "$contents" ]]; then
+            echo -e "${RED}Cannot access directory: $current_path${ENDC}"
+            read -p "Press Enter to go back..."
+            current_path=$(dirname "$current_path")
+            continue
+        fi
+        
+        # Parse and display contents
+        local dirs=()
+        local files=()
+        local index=1
+        
+        echo -e "\n${BOLD}${YELLOW}Directories:${ENDC}"
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^d ]]; then
+                local name=$(echo "$line" | awk '{print $NF}')
+                if [[ "$name" != "." && "$name" != ".." ]]; then
+                    dirs+=("$name")
+                    local size=$(echo "$line" | awk '{print $5}')
+                    local perms=$(echo "$line" | awk '{print $1}')
+                    printf "${GREEN}%3d. [DIR]  %-30s %10s  %s${ENDC}\n" "$index" "$name" "$size" "$perms"
+                    ((index++))
+                fi
+            fi
+        done <<< "$contents"
+        
+        echo -e "\n${BOLD}${CYAN}Files:${ENDC}"
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^- ]]; then
+                local name=$(echo "$line" | awk '{print $NF}')
+                files+=("$name")
+                local size=$(echo "$line" | awk '{print $5}')
+                local perms=$(echo "$line" | awk '{print $1}')
+                printf "%3d. [FILE] %-30s %10s  %s\n" "$index" "$name" "$size" "$perms"
+                ((index++))
+            fi
+        done <<< "$contents"
+        
+        echo -e "\n${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
+        echo -e "${BOLD}Options:${ENDC}"
+        echo "  ${GREEN}[number]${ENDC} - Navigate to directory / Select file"
+        echo "  ${GREEN}[..]${ENDC}     - Go to parent directory"
+        echo "  ${GREEN}[/]${ENDC}      - Go to root"
+        echo "  ${GREEN}[~]${ENDC}      - Go to /sdcard"
+        echo "  ${GREEN}[p]${ENDC}      - Push file here (drag & drop supported)"
+        echo "  ${GREEN}[m]${ENDC}      - Make directory"
+        echo "  ${GREEN}[d]${ENDC}      - Delete selected"
+        echo "  ${GREEN}[c]${ENDC}      - Copy path to clipboard"
+        echo "  ${GREEN}[r]${ENDC}      - Refresh"
+        echo "  ${GREEN}[q]${ENDC}      - Quit explorer"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
+        
+        read -p "Enter choice: " choice
+        
+        case "$choice" in
+            [0-9]*)
+                if [[ $choice -le ${#dirs[@]} ]]; then
+                    # Navigate to directory
+                    current_path="$current_path/${dirs[$choice-1]}"
+                elif [[ $choice -le $((${#dirs[@]} + ${#files[@]})) ]]; then
+                    # File selected - show options
+                    local file_index=$((choice - ${#dirs[@]} - 1))
+                    selected_file="${files[$file_index]}"
+                    handle_selected_file "$current_path/$selected_file"
+                else
+                    echo -e "${RED}Invalid selection${ENDC}"
+                    sleep 1
+                fi
+                ;;
+            "..")
+                current_path=$(dirname "$current_path")
+                ;;
+            "/")
+                current_path="/"
+                ;;
+            "~")
+                current_path="/sdcard"
+                ;;
+            "p"|"P")
+                push_to_current_directory "$current_path"
+                ;;
+            "m"|"M")
+                make_directory_on_device "$current_path"
+                ;;
+            "d"|"D")
+                delete_from_device "$current_path"
+                ;;
+            "c"|"C")
+                echo "$current_path" | xclip -selection clipboard 2>/dev/null || \
+                echo "$current_path" | pbcopy 2>/dev/null || \
+                echo -e "${YELLOW}Path: $current_path${ENDC}"
+                echo -e "${GREEN}Path copied/displayed${ENDC}"
+                sleep 1
+                ;;
+            "r"|"R")
+                continue
+                ;;
+            "q"|"Q")
+                return
+                ;;
+            *)
+                # Check if it's a path (drag & drop)
+                if [[ -e "$(process_path "$choice")" ]]; then
+                    local processed_path=$(process_path "$choice")
+                    echo -e "${GREEN}Detected file: $processed_path${ENDC}"
+                    push_specific_file "$processed_path" "$current_path"
+                fi
+                ;;
+        esac
+    done
+}
+
+handle_selected_file() {
+    local file_path="$1"
+    local filename=$(basename "$file_path")
+    
+    clear_screen
+    echo -e "${BOLD}${CYAN}File Options: $filename${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo "1. Pull file to computer"
+    echo "2. View file (if text)"
+    echo "3. Delete file"
+    echo "4. Copy file path"
+    echo "5. Get file info"
+    echo "6. Cancel"
+    
+    read -p "Select option: " opt
+    
+    case $opt in
+        1)
+            read -p "Save to (drag & drop or type path, default current dir): " dest
+            dest=$(process_path "${dest:-.}")
+            echo -e "${BLUE}Pulling $filename...${ENDC}"
+            $ADB -s $SERIAL pull "$file_path" "$dest/"
+            echo -e "${GREEN}File saved to: $dest/$filename${ENDC}"
+            read -p "Press Enter..."
+            ;;
+        2)
+            echo -e "${BLUE}File contents:${ENDC}"
+            echo "----------------------------------------"
+            $ADB -s $SERIAL shell cat "$file_path" 2>/dev/null | head -100
+            echo "----------------------------------------"
+            read -p "Press Enter..."
+            ;;
+        3)
+            confirm_action "Delete $filename?" && \
+            $ADB -s $SERIAL shell rm "$file_path" && \
+            echo -e "${GREEN}File deleted${ENDC}"
+            sleep 1
+            ;;
+        4)
+            echo "$file_path" | xclip -selection clipboard 2>/dev/null || \
+            echo "$file_path" | pbcopy 2>/dev/null || \
+            echo -e "${YELLOW}Path: $file_path${ENDC}"
+            echo -e "${GREEN}Path copied/displayed${ENDC}"
+            sleep 1
+            ;;
+        5)
+            echo -e "${BLUE}File information:${ENDC}"
+            $ADB -s $SERIAL shell stat "$file_path" 2>/dev/null
+            read -p "Press Enter..."
+            ;;
+    esac
+}
+
+push_to_current_directory() {
+    local device_path="$1"
+    echo -e "${BOLD}${GREEN}Push File to Device${ENDC}"
+    echo -e "${CYAN}Target directory: $device_path${ENDC}"
+    echo -e "${YELLOW}Drag & drop file here or type path:${ENDC}"
+    
+    read -p "File path: " local_file
+    local_file=$(process_path "$local_file")
+    
+    if [[ ! -e "$local_file" ]]; then
+        echo -e "${RED}File not found: $local_file${ENDC}"
+        sleep 2
+        return
+    fi
+    
+    echo -e "${BLUE}Pushing $(basename "$local_file")...${ENDC}"
+    $ADB -s $SERIAL push "$local_file" "$device_path/" 2>&1 | while read line; do
+        echo -e "${GREEN}$line${ENDC}"
+    done
+    
+    echo -e "${GREEN}✓ File pushed successfully${ENDC}"
+    read -p "Press Enter..."
+}
+
+push_specific_file() {
+    local local_file="$1"
+    local device_path="$2"
+    
+    echo -e "${BLUE}Pushing $(basename "$local_file") to $device_path...${ENDC}"
+    $ADB -s $SERIAL push "$local_file" "$device_path/" 2>&1 | while read line; do
+        echo -e "${GREEN}$line${ENDC}"
+    done
+    
+    echo -e "${GREEN}✓ File pushed successfully${ENDC}"
+    sleep 2
+}
+
+make_directory_on_device() {
+    local current_path="$1"
+    read -p "Directory name: " dirname
+    
+    if [[ -n "$dirname" ]]; then
+        $ADB -s $SERIAL shell mkdir "$current_path/$dirname" 2>/dev/null
+        echo -e "${GREEN}Directory created: $dirname${ENDC}"
+        sleep 1
+    fi
+}
+
+delete_from_device() {
+    local current_path="$1"
+    echo -e "${RED}${BOLD}Delete Options${ENDC}"
+    echo "1. Delete by name"
+    echo "2. Cancel"
+    
+    read -p "Choice: " del_choice
+    
+    if [[ "$del_choice" == "1" ]]; then
+        read -p "Name to delete: " name
+        if [[ -n "$name" ]]; then
+            confirm_action "Delete $name?" && \
+            $ADB -s $SERIAL shell rm -rf "$current_path/$name" 2>/dev/null && \
+            echo -e "${GREEN}Deleted: $name${ENDC}"
+            sleep 1
+        fi
+    fi
+}
+
+# Samsung Odin4 operations
+install_odin4_auto() {
+    if [[ "$OSTYPE" != "linux-gnu"* ]]; then
+        echo -e "${YELLOW}Odin4 is only available for Linux.${ENDC}"
+        return 1
+    fi
+    
+    # Check if already installed
+    if command -v odin4 &>/dev/null; then
+        echo -e "${GREEN}Odin4 already installed.${ENDC}"
+        ODIN4_INSTALLED=true
+        return 0
+    fi
+    
+    echo -e "${BLUE}Installing Odin4 for Linux...${ENDC}"
+    
+    # Try package managers first
+    if command -v yay &>/dev/null; then
+        echo -e "${BLUE}Installing via AUR (yay)...${ENDC}"
+        yay -S --noconfirm odin4-cli 2>/dev/null && ODIN4_INSTALLED=true
+    elif command -v paru &>/dev/null; then
+        echo -e "${BLUE}Installing via AUR (paru)...${ENDC}"
+        paru -S --noconfirm odin4-cli 2>/dev/null && ODIN4_INSTALLED=true
+    else
+        # Download from GitHub
+        echo -e "${BLUE}Downloading Odin4 from GitHub...${ENDC}"
+        ODIN_URL="https://github.com/Adrilaw/OdinV4/releases/download/v1.0/odin.zip"
+        TEMP_DIR=$(mktemp -d)
+        
+        if wget -q "$ODIN_URL" -O "$TEMP_DIR/odin.zip"; then
+            cd "$TEMP_DIR"
+            unzip -q odin.zip
+            
+            if [[ -f "odin4" ]]; then
+                chmod +x odin4
+                sudo mv odin4 /usr/local/bin/
+                ODIN4_INSTALLED=true
+                echo -e "${GREEN}Odin4 installed successfully${ENDC}"
+            else
+                echo -e "${RED}Odin4 binary not found in archive${ENDC}"
+            fi
+            
+            cd - >/dev/null
+            rm -rf "$TEMP_DIR"
+        else
+            echo -e "${RED}Failed to download Odin4${ENDC}"
+        fi
+    fi
+    
+    # Setup udev rules for Samsung
+    setup_samsung_udev_rules
+    
+    return $([[ $ODIN4_INSTALLED == true ]] && echo 0 || echo 1)
+}
+
+setup_samsung_udev_rules() {
+    local RULES_FILE="/etc/udev/rules.d/51-samsung.rules"
+    
+    if [[ ! -f "$RULES_FILE" ]]; then
+        echo -e "${BLUE}Setting up Samsung USB rules...${ENDC}"
+        
+        cat << 'EOF' | sudo tee "$RULES_FILE" > /dev/null
+# Samsung devices
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0666", GROUP="plugdev"
+# Samsung Galaxy models
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6860", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="68??", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="6866", MODE="0666", GROUP="plugdev"
+# Samsung download mode
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ATTR{idProduct}=="685d", MODE="0666", GROUP="plugdev"
+EOF
+        
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger
+        
+        # Add user to plugdev
+        sudo usermod -a -G plugdev $USER 2>/dev/null
+        
+        echo -e "${GREEN}Samsung USB rules configured${ENDC}"
+    fi
+}
+
+# Enhanced Samsung flash with drag & drop
+samsung_flash_with_odin() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}Samsung Firmware Flash (Odin4)${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${CYAN}Drag & drop .tar/.tar.md5 files or type paths${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    # File inputs with drag & drop support
+    echo -e "\n${BOLD}Firmware Files:${ENDC}"
+    
+    echo -e "${BLUE}BL (Bootloader):${ENDC}"
+    read -p "Path (optional): " BL_FILE
+    BL_FILE=$(process_path "$BL_FILE")
+    
+    echo -e "${BLUE}AP (System/PDA):${ENDC}"
+    read -p "Path (required): " AP_FILE
+    AP_FILE=$(process_path "$AP_FILE")
+    
+    echo -e "${BLUE}CP (Modem):${ENDC}"
+    read -p "Path (optional): " CP_FILE
+    CP_FILE=$(process_path "$CP_FILE")
+    
+    echo -e "${BLUE}CSC (Region):${ENDC}"
+    read -p "Path (optional): " CSC_FILE
+    CSC_FILE=$(process_path "$CSC_FILE")
+    
+    echo -e "${BLUE}HOME_CSC (Keep Data):${ENDC}"
+    read -p "Path (optional, use instead of CSC to keep data): " HOME_CSC_FILE
+    HOME_CSC_FILE=$(process_path "$HOME_CSC_FILE")
+    
+    # Validate required file
+    if [[ -z "$AP_FILE" || ! -f "$AP_FILE" ]]; then
+        echo -e "${RED}AP file is required for flashing${ENDC}"
+        read -p "Press Enter..."
+        return
+    fi
+    
+    # Build Odin4 command
+    local ODIN_CMD="sudo odin4"
+    
+    [[ -n "$BL_FILE" && -f "$BL_FILE" ]] && ODIN_CMD="$ODIN_CMD -b \"$BL_FILE\""
+    [[ -n "$AP_FILE" && -f "$AP_FILE" ]] && ODIN_CMD="$ODIN_CMD -a \"$AP_FILE\""
+    [[ -n "$CP_FILE" && -f "$CP_FILE" ]] && ODIN_CMD="$ODIN_CMD -c \"$CP_FILE\""
+    
+    # Use HOME_CSC if provided, otherwise regular CSC
+    if [[ -n "$HOME_CSC_FILE" && -f "$HOME_CSC_FILE" ]]; then
+        ODIN_CMD="$ODIN_CMD -s \"$HOME_CSC_FILE\""
+    elif [[ -n "$CSC_FILE" && -f "$CSC_FILE" ]]; then
+        ODIN_CMD="$ODIN_CMD -s \"$CSC_FILE\""
+    fi
+    
+    # Show flash summary
+    echo -e "\n${BOLD}${YELLOW}Flash Summary:${ENDC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    [[ -n "$BL_FILE" && -f "$BL_FILE" ]] && echo -e "BL: ${GREEN}$(basename "$BL_FILE")${ENDC}"
+    [[ -n "$AP_FILE" && -f "$AP_FILE" ]] && echo -e "AP: ${GREEN}$(basename "$AP_FILE")${ENDC}"
+    [[ -n "$CP_FILE" && -f "$CP_FILE" ]] && echo -e "CP: ${GREEN}$(basename "$CP_FILE")${ENDC}"
+    [[ -n "$CSC_FILE" && -f "$CSC_FILE" ]] && echo -e "CSC: ${GREEN}$(basename "$CSC_FILE")${ENDC}"
+    [[ -n "$HOME_CSC_FILE" && -f "$HOME_CSC_FILE" ]] && echo -e "HOME_CSC: ${GREEN}$(basename "$HOME_CSC_FILE")${ENDC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    echo -e "\n${RED}${BOLD}⚠️  CRITICAL WARNING ⚠️${ENDC}"
+    echo -e "${RED}This will replace device firmware!${ENDC}"
+    echo -e "${RED}Wrong firmware = BRICK${ENDC}"
+    
+    confirm_action "Proceed with firmware flash?" || return
+    
+    echo -e "\n${BLUE}Executing: $ODIN_CMD${ENDC}"
+    eval $ODIN_CMD
+    
+    if [[ $? -eq 0 ]]; then
+        echo -e "\n${GREEN}${BOLD}✓ Flash completed successfully!${ENDC}"
+    else
+        echo -e "\n${RED}${BOLD}✗ Flash failed! Check device and try again.${ENDC}"
+    fi
+    
+    read -p "Press Enter to continue..."
+}
+
+# Initialize dependencies
+check_requirements() {
+    echo -e "${BLUE}Checking requirements...${ENDC}"
+    
+    # Check for ADB
+    if ! command -v adb &>/dev/null; then
+        echo -e "${YELLOW}ADB not found. Installing...${ENDC}"
+        install_dependencies
+    fi
+    ADB=$(command -v adb)
+    
+    # Check for Fastboot
+    if ! command -v fastboot &>/dev/null; then
+        echo -e "${YELLOW}Fastboot not found. Installing...${ENDC}"
+        install_dependencies
+    fi
+    FASTBOOT=$(command -v fastboot)
+    
+    # Check versions
+    if [[ -n "$ADB" ]]; then
+        ADB_VERSION=$($ADB version 2>/dev/null | head -1)
+        echo -e "${GREEN}✓ ADB: $ADB_VERSION${ENDC}"
+    fi
+    
+    if [[ -n "$FASTBOOT" ]]; then
+        FASTBOOT_VERSION=$($FASTBOOT --version 2>/dev/null | head -1)
+        echo -e "${GREEN}✓ Fastboot: $FASTBOOT_VERSION${ENDC}"
+    fi
+    
+    # Start ADB server
+    $ADB start-server &>/dev/null
+    
+    # Check for Samsung tools
+    check_samsung_tools
+}
+
+install_dependencies() {
+    echo -e "${BLUE}Installing core dependencies...${ENDC}"
+    
+    if [[ -f /etc/debian_version ]]; then
+        sudo apt update && sudo apt install -y android-tools-adb android-tools-fastboot curl wget unzip libusb-1.0-0
+    elif [[ -f /etc/redhat-release ]]; then
+        sudo dnf install -y android-tools curl wget unzip libusb
+    elif [[ -f /etc/arch-release ]]; then
+        sudo pacman -S --noconfirm android-tools curl wget unzip libusb
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        if command -v brew &>/dev/null; then
+            brew install android-platform-tools curl wget libusb
+        else
+            echo -e "${RED}Homebrew required. Install from https://brew.sh${ENDC}"
+            return 1
+        fi
+    else
+        echo -e "${RED}Unsupported OS for automatic installation${ENDC}"
+        return 1
+    fi
+}
+
+check_samsung_tools() {
+    # Check Odin4
+    if command -v odin4 &>/dev/null; then
+        ODIN4_INSTALLED=true
+        echo -e "${GREEN}✓ Odin4: Installed${ENDC}"
+    else
+        echo -e "${YELLOW}⚠ Odin4: Not installed (Samsung features limited)${ENDC}"
+    fi
+    
+    # Check Heimdall
+    if command -v heimdall &>/dev/null; then
+        HEIMDALL_INSTALLED=true
+        echo -e "${GREEN}✓ Heimdall: Installed${ENDC}"
+    else
+        echo -e "${YELLOW}⚠ Heimdall: Not installed (Samsung features limited)${ENDC}"
+    fi
+}
+
+confirm_action() {
+    local prompt="$1"
+    read -p "${BOLD}${YELLOW}$prompt (y/N): ${ENDC}" response
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# Device detection and info
+get_device_info() {
+    DEVICES=$($ADB devices 2>/dev/null | tail -n +2 | grep -v "^$")
+    
+    if [[ -z "$DEVICES" ]]; then
+        echo -e "${RED}No devices detected${ENDC}"
+        DEVICE_INFO=""
+        return 1
+    fi
+    
+    # Handle multiple devices
+    DEVICE_COUNT=$(echo "$DEVICES" | wc -l)
+    
+    if [[ $DEVICE_COUNT -gt 1 ]]; then
+        echo -e "${GREEN}Multiple devices connected:${ENDC}"
+        echo "$DEVICES" | nl -w 2 -s '. '
+        read -p "Select device (number): " CHOICE
+        SERIAL=$(echo "$DEVICES" | sed -n "${CHOICE}p" | awk '{print $1}')
+    else
+        SERIAL=$(echo "$DEVICES" | awk '{print $1}')
+    fi
+    
+    # Get device details
+    STATE=$($ADB devices | grep $SERIAL | awk '{print $2}')
+    
+    if [[ "$STATE" == "unauthorized" ]]; then
+        echo -e "${RED}Device unauthorized. Check device screen${ENDC}"
+        DEVICE_INFO="serial=$SERIAL state=$STATE"
+        return 1
+    fi
+    
+    MODEL=$($ADB -s $SERIAL shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+    ANDROID_VERSION=$($ADB -s $SERIAL shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')
+    MANUFACTURER=$($ADB -s $SERIAL shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r')
+    ARCHITECTURE=$($ADB -s $SERIAL shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+    
+    DEVICE_INFO="serial=$SERIAL model=$MODEL android_version=$ANDROID_VERSION manufacturer=$MANUFACTURER architecture=$ARCHITECTURE state=$STATE"
+    
+    return 0
+}
+
+display_device_info() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}📱 DEVICE INFORMATION${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    if [[ -z "$DEVICE_INFO" ]]; then
+        echo -e "${RED}No device information available${ENDC}"
+    else
+        echo -e "${GREEN}Serial:${ENDC}           $(echo $DEVICE_INFO | grep -oP 'serial=\K[^ ]+')"
+        echo -e "${GREEN}Manufacturer:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'manufacturer=\K[^ ]+')"
+        echo -e "${GREEN}Model:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+')"
+        echo -e "${GREEN}Android Version:${ENDC}  $(echo $DEVICE_INFO | grep -oP 'android_version=\K[^ ]+')"
+        echo -e "${GREEN}Architecture:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'architecture=\K[^ ]+')"
+        echo -e "${GREEN}State:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')"
+        
+        # Additional info
+        BATTERY=$($ADB -s $SERIAL shell dumpsys battery | grep level | head -1 | awk '{print $2}')
+        [[ -n "$BATTERY" ]] && echo -e "${GREEN}Battery:${ENDC}          $BATTERY%"
+        
+        IP=$($ADB -s $SERIAL shell ip addr show wlan0 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+        [[ -n "$IP" ]] && echo -e "${GREEN}IP Address:${ENDC}       $IP"
+    fi
+    
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    read -p "Press Enter to continue..."
+}
+
+# Enhanced file operations
+backup_device() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}📦 DEVICE BACKUP${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo "1. Full backup (all apps + data)"
+    echo "2. APK backup only"
+    echo "3. System data only"
+    echo "4. Custom backup"
+    
+    read -p "Select option: " opt
+    
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="backup_${TIMESTAMP}.ab"
+    
+    case $opt in
+        1)
+            echo -e "${BLUE}Creating full backup...${ENDC}"
+            $ADB -s $SERIAL backup -apk -shared -all -system -f "$BACKUP_FILE"
+            ;;
+        2)
+            echo -e "${BLUE}Backing up APKs...${ENDC}"
+            mkdir -p "apk_backup_$TIMESTAMP"
+            for pkg in $($ADB -s $SERIAL shell pm list packages -3 | cut -d: -f2); do
+                echo -e "${GREEN}Backing up: $pkg${ENDC}"
+                APK_PATH=$($ADB -s $SERIAL shell pm path $pkg | cut -d: -f2 | tr -d '\r')
+                [[ -n "$APK_PATH" ]] && $ADB -s $SERIAL pull "$APK_PATH" "apk_backup_$TIMESTAMP/${pkg}.apk" 2>/dev/null
+            done
+            ;;
+        3)
+            echo -e "${BLUE}Backing up system data...${ENDC}"
+            $ADB -s $SERIAL backup -noapk -shared -nosystem -f "$BACKUP_FILE"
+            ;;
+        4)
+            read -p "Enter packages to backup (space separated): " PACKAGES
+            $ADB -s $SERIAL backup -f "$BACKUP_FILE" $PACKAGES
+            ;;
+    esac
+    
+    echo -e "${GREEN}Backup completed${ENDC}"
+    read -p "Press Enter..."
+}
+
+# Fastboot operations
+fastboot_operations() {
+    clear_screen
+    echo -e "${BOLD}${RED}⚠️  FASTBOOT MODE ⚠️${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    # Check for fastboot devices
+    FASTBOOT_DEVICES=$($FASTBOOT devices 2>/dev/null)
+    
+    if [[ -z "$FASTBOOT_DEVICES" ]]; then
+        echo -e "${RED}No devices in fastboot mode${ENDC}"
+        echo -e "${CYAN}To enter fastboot:${ENDC}"
+        echo "  • adb reboot bootloader"
+        echo "  • Volume Down + Power (device off)"
+        read -p "Press Enter..."
+        return
+    fi
+    
+    echo -e "${GREEN}Fastboot device detected${ENDC}"
+    echo "$FASTBOOT_DEVICES"
+    echo ""
+    
+    echo "1. Flash partition"
+    echo "2. Boot image (temporary)"
+    echo "3. Unlock/Lock bootloader"
+    echo "4. Get device info"
+    echo "5. Format partition"
+    echo "6. Erase partition"
+    echo "7. Flash GSI"
+    echo "8. Reboot options"
+    echo "9. Back"
+    
+    read -p "Select option: " choice
+    
+    case $choice in
+        1)
+            flash_partition
+            ;;
+        2)
+            boot_image
+            ;;
+        3)
+            bootloader_operations
+            ;;
+        4)
+            $FASTBOOT getvar all 2>&1 | grep -v "< waiting"
+            read -p "Press Enter..."
+            ;;
+        5)
+            format_partition
+            ;;
+        6)
+            erase_partition
+            ;;
+        7)
+            flash_gsi
+            ;;
+        8)
+            fastboot_reboot_menu
+            ;;
+    esac
+}
+
+flash_partition() {
+    echo -e "${BOLD}Flash Partition${ENDC}"
+    read -p "Partition name (boot/recovery/system/vendor/vbmeta): " PARTITION
+    echo -e "${YELLOW}Drag & drop image file or type path:${ENDC}"
+    read -p "Image file: " IMAGE
+    IMAGE=$(process_path "$IMAGE")
+    
+    if [[ ! -f "$IMAGE" ]]; then
+        echo -e "${RED}File not found${ENDC}"
+        sleep 2
+        return
+    fi
+    
+    confirm_action "Flash $PARTITION with $(basename "$IMAGE")?" || return
+    
+    $FASTBOOT flash $PARTITION "$IMAGE"
+    echo -e "${GREEN}Flash completed${ENDC}"
+    read -p "Press Enter..."
+}
+
+boot_image() {
+    echo -e "${BOLD}Boot Image (Temporary)${ENDC}"
+    echo -e "${YELLOW}Drag & drop image file or type path:${ENDC}"
+    read -p "Image file: " IMAGE
+    IMAGE=$(process_path "$IMAGE")
+    
+    if [[ ! -f "$IMAGE" ]]; then
+        echo -e "${RED}File not found${ENDC}"
+        sleep 2
+        return
+    fi
+    
+    $FASTBOOT boot "$IMAGE"
+    echo -e "${GREEN}Boot command sent${ENDC}"
+    read -p "Press Enter..."
+}
+
+bootloader_operations() {
+    echo -e "${BOLD}Bootloader Operations${ENDC}"
+    echo "1. Unlock bootloader (WIPES DATA)"
+    echo "2. Lock bootloader"
+    echo "3. Get unlock status"
+    echo "4. Cancel"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1)
+            echo -e "${RED}${BOLD}WARNING: This will WIPE ALL DATA${ENDC}"
+            confirm_action "Proceed with unlock?" || return
+            $FASTBOOT flashing unlock || $FASTBOOT oem unlock
+            ;;
+        2)
+            echo -e "${RED}${BOLD}WARNING: Lock with custom software = BRICK${ENDC}"
+            confirm_action "Proceed with lock?" || return
+            $FASTBOOT flashing lock || $FASTBOOT oem lock
+            ;;
+        3)
+            $FASTBOOT getvar unlocked 2>&1
+            $FASTBOOT oem device-info 2>&1
+            ;;
+    esac
+    
+    read -p "Press Enter..."
+}
+
+format_partition() {
+    echo -e "${BOLD}Format Partition${ENDC}"
+    read -p "Partition name: " PARTITION
+    read -p "Filesystem (ext4/f2fs): " FS
+    
+    confirm_action "Format $PARTITION as $FS?" || return
+    
+    $FASTBOOT format:$FS $PARTITION
+    echo -e "${GREEN}Format completed${ENDC}"
+    read -p "Press Enter..."
+}
+
+erase_partition() {
+    echo -e "${BOLD}${RED}Erase Partition${ENDC}"
+    read -p "Partition name: " PARTITION
+    
+    echo -e "${RED}WARNING: This will ERASE $PARTITION${ENDC}"
+    confirm_action "Proceed?" || return
+    
+    $FASTBOOT erase $PARTITION
+    echo -e "${GREEN}Erase completed${ENDC}"
+    read -p "Press Enter..."
+}
+
+flash_gsi() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}Flash GSI (Generic System Image)${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${CYAN}Based on your GSI flash recovery documentation${ENDC}"
+    echo ""
+    
+    echo -e "${YELLOW}Requirements:${ENDC}"
+    echo "  • Unlocked bootloader"
+    echo "  • Stock vbmeta.img"
+    echo "  • GSI image (ARM64 A/B)"
+    echo ""
+    
+    echo -e "${YELLOW}Drag & drop files or type paths:${ENDC}"
+    
+    read -p "GSI image: " GSI
+    GSI=$(process_path "$GSI")
+    
+    read -p "vbmeta.img: " VBMETA
+    VBMETA=$(process_path "$VBMETA")
+    
+    if [[ ! -f "$GSI" || ! -f "$VBMETA" ]]; then
+        echo -e "${RED}Required files not found${ENDC}"
+        sleep 2
+        return
+    fi
+    
+    echo -e "\n${BOLD}Flash sequence:${ENDC}"
+    echo "1. Flash stock vbmeta"
+    echo "2. Flash GSI to system"
+    echo "3. Disable vbmeta verification"
+    echo "4. Format userdata"
+    echo "5. Reboot"
+    
+    confirm_action "Proceed with GSI flash?" || return
+    
+    # Execute flash sequence
+    echo -e "${BLUE}Step 1: Flashing vbmeta...${ENDC}"
+    $FASTBOOT flash vbmeta_a "$VBMETA"
+    $FASTBOOT flash vbmeta_b "$VBMETA"
+    
+    echo -e "${BLUE}Step 2: Flashing GSI...${ENDC}"
+    $FASTBOOT flash system "$GSI"
+    
+    echo -e "${BLUE}Step 3: Disabling vbmeta verification...${ENDC}"
+    $FASTBOOT --disable-verity --disable-verification flash vbmeta_a "$VBMETA"
+    $FASTBOOT --disable-verity --disable-verification flash vbmeta_b "$VBMETA"
+    
+    echo -e "${BLUE}Step 4: Formatting userdata...${ENDC}"
+    $FASTBOOT format userdata
+    
+    echo -e "${GREEN}GSI flash completed!${ENDC}"
+    read -p "Press Enter to reboot..."
+    
+    $FASTBOOT reboot
+}
+
+fastboot_reboot_menu() {
+    echo -e "${BOLD}Reboot Options${ENDC}"
+    echo "1. Reboot to system"
+    echo "2. Reboot to bootloader"
+    echo "3. Reboot to recovery"
+    echo "4. Reboot to download (Samsung)"
+    echo "5. Continue boot"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1) $FASTBOOT reboot ;;
+        2) $FASTBOOT reboot-bootloader ;;
+        3) $FASTBOOT reboot recovery ;;
+        4) $FASTBOOT reboot download ;;
+        5) $FASTBOOT continue ;;
+    esac
+}
+
+# Main menu system
+main_menu() {
+    while true; do
+        clear_screen
+        display_banner
+        
+        # Get device info
+        get_device_info 2>/dev/null
+        
+        if [[ -n "$DEVICE_INFO" ]]; then
+            STATE=$(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')
+            MODEL=$(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+')
+            echo -e "${GREEN}Device: $MODEL ($STATE)${ENDC}"
+        else
+            echo -e "${YELLOW}No device connected${ENDC}"
+        fi
+        
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+        echo -e "${BOLD}Main Menu:${ENDC}"
+        echo "  1. Device Information"
+        echo "  2. File Explorer (Visual)"
+        echo "  3. File Operations"
+        echo "  4. App Management"
+        echo "  5. System Operations"
+        echo "  6. Fastboot Mode"
+        echo "  7. Samsung Operations"
+        echo "  8. Device Backup/Restore"
+        echo "  9. Shell Access"
+        echo "  0. Settings & Tools"
+        echo "  q. Exit"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+        
+        read -p "Select option: " choice
+        
+        case $choice in
+            1) display_device_info ;;
+            2) [[ -n "$SERIAL" ]] && device_file_explorer || echo -e "${RED}No device${ENDC}" ;;
+            3) file_operations_menu ;;
+            4) app_management_menu ;;
+            5) system_operations_menu ;;
+            6) fastboot_operations ;;
+            7) samsung_operations_menu ;;
+            8) backup_restore_menu ;;
+            9) [[ -n "$SERIAL" ]] && $ADB -s $SERIAL shell || echo -e "${RED}No device${ENDC}" ;;
+            0) settings_menu ;;
+            q|Q) exit 0 ;;
+        esac
+    done
+}
+
+file_operations_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}📁 FILE OPERATIONS${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo "1. Push file (drag & drop)"
+    echo "2. Pull file"
+    echo "3. Push directory"
+    echo "4. Pull directory"
+    echo "5. Screenshot"
+    echo "6. Screen recording"
+    echo "7. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1)
+            echo -e "${YELLOW}Drag & drop file or type path:${ENDC}"
+            read -p "File: " FILE
+            FILE=$(process_path "$FILE")
+            read -p "Device path (default /sdcard/): " DEST
+            DEST=${DEST:-/sdcard/}
+            [[ -f "$FILE" ]] && $ADB -s $SERIAL push "$FILE" "$DEST"
+            ;;
+        2)
+            read -p "Device file path: " SRC
+            read -p "Local destination: " DEST
+            DEST=$(process_path "${DEST:-.}")
+            $ADB -s $SERIAL pull "$SRC" "$DEST"
+            ;;
+        3)
+            echo -e "${YELLOW}Drag & drop directory or type path:${ENDC}"
+            read -p "Directory: " DIR
+            DIR=$(process_path "$DIR")
+            read -p "Device path: " DEST
+            [[ -d "$DIR" ]] && $ADB -s $SERIAL push "$DIR" "$DEST"
+            ;;
+        4)
+            read -p "Device directory: " SRC
+            read -p "Local destination: " DEST
+            DEST=$(process_path "${DEST:-.}")
+            $ADB -s $SERIAL pull "$SRC" "$DEST"
+            ;;
+        5)
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            $ADB -s $SERIAL shell screencap /sdcard/screenshot_$TIMESTAMP.png
+            $ADB -s $SERIAL pull /sdcard/screenshot_$TIMESTAMP.png .
+            $ADB -s $SERIAL shell rm /sdcard/screenshot_$TIMESTAMP.png
+            echo -e "${GREEN}Screenshot saved: screenshot_$TIMESTAMP.png${ENDC}"
+            ;;
+        6)
+            read -p "Duration (seconds, max 180): " DURATION
+            DURATION=${DURATION:-30}
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            echo -e "${BLUE}Recording... Press Ctrl+C to stop${ENDC}"
+            $ADB -s $SERIAL shell screenrecord --time-limit=$DURATION /sdcard/recording_$TIMESTAMP.mp4
+            $ADB -s $SERIAL pull /sdcard/recording_$TIMESTAMP.mp4 .
+            $ADB -s $SERIAL shell rm /sdcard/recording_$TIMESTAMP.mp4
+            echo -e "${GREEN}Recording saved: recording_$TIMESTAMP.mp4${ENDC}"
+            ;;
+    esac
+    
+    [[ $opt != 7 ]] && read -p "Press Enter..."
+}
+
+app_management_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}📱 APP MANAGEMENT${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo "1. Install APK (drag & drop)"
+    echo "2. Uninstall app"
+    echo "3. List installed apps"
+    echo "4. Clear app data"
+    echo "5. Force stop app"
+    echo "6. Enable/Disable app"
+    echo "7. Extract APK from device"
+    echo "8. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1)
+            echo -e "${YELLOW}Drag & drop APK or type path:${ENDC}"
+            read -p "APK file: " APK
+            APK=$(process_path "$APK")
+            [[ -f "$APK" ]] && $ADB -s $SERIAL install "$APK"
+            ;;
+        2)
+            read -p "Package name: " PKG
+            $ADB -s $SERIAL uninstall $PKG
+            ;;
+        3)
+            echo "1. All apps"
+            echo "2. System apps"
+            echo "3. User apps"
+            read -p "Select: " type
+            case $type in
+                1) $ADB -s $SERIAL shell pm list packages ;;
+                2) $ADB -s $SERIAL shell pm list packages -s ;;
+                3) $ADB -s $SERIAL shell pm list packages -3 ;;
+            esac
+            ;;
+        4)
+            read -p "Package name: " PKG
+            $ADB -s $SERIAL shell pm clear $PKG
+            ;;
+        5)
+            read -p "Package name: " PKG
+            $ADB -s $SERIAL shell am force-stop $PKG
+            ;;
+        6)
+            read -p "Package name: " PKG
+            echo "1. Enable"
+            echo "2. Disable"
+            read -p "Select: " action
+            case $action in
+                1) $ADB -s $SERIAL shell pm enable $PKG ;;
+                2) $ADB -s $SERIAL shell pm disable-user $PKG ;;
+            esac
+            ;;
+        7)
+            read -p "Package name: " PKG
+            APK_PATH=$($ADB -s $SERIAL shell pm path $PKG | cut -d: -f2 | tr -d '\r')
+            [[ -n "$APK_PATH" ]] && $ADB -s $SERIAL pull "$APK_PATH" "${PKG}.apk"
+            ;;
+    esac
+    
+    [[ $opt != 8 ]] && read -p "Press Enter..."
+}
+
+system_operations_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}⚙️  SYSTEM OPERATIONS${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo "1. Reboot options"
+    echo "2. Logcat viewer"
+    echo "3. Battery info"
+    echo "4. Network info"
+    echo "5. System properties"
+    echo "6. Running processes"
+    echo "7. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1)
+            echo "1. Normal reboot"
+            echo "2. Recovery"
+            echo "3. Bootloader"
+            echo "4. Download (Samsung)"
+            read -p "Select: " reboot
+            case $reboot in
+                1) $ADB -s $SERIAL reboot ;;
+                2) $ADB -s $SERIAL reboot recovery ;;
+                3) $ADB -s $SERIAL reboot bootloader ;;
+                4) $ADB -s $SERIAL reboot download ;;
+            esac
+            ;;
+        2)
+            echo -e "${GREEN}Logcat (Ctrl+C to stop):${ENDC}"
+            $ADB -s $SERIAL logcat
+            ;;
+        3)
+            $ADB -s $SERIAL shell dumpsys battery
+            ;;
+        4)
+            $ADB -s $SERIAL shell ip addr
+            $ADB -s $SERIAL shell netstat -an
+            ;;
+        5)
+            $ADB -s $SERIAL shell getprop | less
+            ;;
+        6)
+            $ADB -s $SERIAL shell ps -A
+            ;;
+    esac
+    
+    [[ $opt != 7 ]] && read -p "Press Enter..."
+}
+
+samsung_operations_menu() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}📱 SAMSUNG OPERATIONS${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    if [[ $ODIN4_INSTALLED == false && $HEIMDALL_INSTALLED == false ]]; then
+        echo -e "${RED}No Samsung tools installed${ENDC}"
+        echo "1. Install Odin4"
+        echo "2. Install Heimdall"
+        echo "3. Back"
+        
+        read -p "Select: " opt
+        case $opt in
+            1) install_odin4_auto ;;
+            2) 
+                if command -v apt &>/dev/null; then
+                    sudo apt install heimdall-flash
+                elif command -v pacman &>/dev/null; then
+                    sudo pacman -S heimdall
+                fi
+                ;;
+        esac
+        read -p "Press Enter..."
+        return
+    fi
+    
+    echo "1. Flash firmware with Odin4"
+    echo "2. Flash recovery"
+    echo "3. Flash single file"
+    echo "4. Check download mode"
+    echo "5. PIT file operations"
+    echo "6. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1) samsung_flash_with_odin ;;
+        2)
+            echo -e "${YELLOW}Drag & drop recovery file:${ENDC}"
+            read -p "Recovery: " RECOVERY
+            RECOVERY=$(process_path "$RECOVERY")
+            [[ -f "$RECOVERY" ]] && sudo odin4 -a "$RECOVERY"
+            ;;
+        3)
+            echo "Partition types:"
+            echo "1. BL (Bootloader)"
+            echo "2. AP (System)"
+            echo "3. CP (Modem)"
+            echo "4. CSC (Region)"
+            read -p "Select: " part_type
+            
+            echo -e "${YELLOW}Drag & drop file:${ENDC}"
+            read -p "File: " FILE
+            FILE=$(process_path "$FILE")
+            
+            if [[ -f "$FILE" ]]; then
+                case $part_type in
+                    1) sudo odin4 -b "$FILE" ;;
+                    2) sudo odin4 -a "$FILE" ;;
+                    3) sudo odin4 -c "$FILE" ;;
+                    4) sudo odin4 -s "$FILE" ;;
+                esac
+            fi
+            ;;
+        4)
+            echo -e "${BLUE}Checking for Samsung devices...${ENDC}"
+            lsusb | grep "04e8:" || echo -e "${RED}No Samsung devices found${ENDC}"
+            [[ $ODIN4_INSTALLED == true ]] && sudo odin4 -l
+            ;;
+        5)
+            echo "1. Download PIT"
+            echo "2. Flash with PIT"
+            read -p "Select: " pit_opt
+            
+            case $pit_opt in
+                1)
+                    read -p "Output filename: " PIT_FILE
+                    [[ $HEIMDALL_INSTALLED == true ]] && sudo heimdall download-pit --output "$PIT_FILE"
+                    ;;
+                2)
+                    read -p "PIT file path: " PIT
+                    PIT=$(process_path "$PIT")
+                    [[ -f "$PIT" && $ODIN4_INSTALLED == true ]] && sudo odin4 --pit "$PIT"
+                    ;;
+            esac
+            ;;
+    esac
+    
+    [[ $opt != 6 ]] && read -p "Press Enter..."
+}
+
+backup_restore_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}💾 BACKUP & RESTORE${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo "1. Create full backup"
+    echo "2. Restore backup"
+    echo "3. Backup APKs only"
+    echo "4. Backup specific apps"
+    echo "5. Backup SMS/Contacts"
+    echo "6. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1) backup_device ;;
+        2)
+            echo -e "${YELLOW}Drag & drop backup file:${ENDC}"
+            read -p "Backup file: " BACKUP
+            BACKUP=$(process_path "$BACKUP")
+            [[ -f "$BACKUP" ]] && $ADB -s $SERIAL restore "$BACKUP"
+            ;;
+        3)
+            mkdir -p apk_backup_$(date +%Y%m%d)
+            for pkg in $($ADB -s $SERIAL shell pm list packages -3 | cut -d: -f2); do
+                echo -e "${GREEN}Backing up: $pkg${ENDC}"
+                APK_PATH=$($ADB -s $SERIAL shell pm path $pkg | cut -d: -f2 | tr -d '\r')
+                [[ -n "$APK_PATH" ]] && $ADB -s $SERIAL pull "$APK_PATH" "apk_backup_$(date +%Y%m%d)/${pkg}.apk" 2>/dev/null
+            done
+            ;;
+        4)
+            read -p "Package names (space separated): " PACKAGES
+            BACKUP_FILE="backup_apps_$(date +%Y%m%d_%H%M%S).ab"
+            $ADB -s $SERIAL backup -apk -f "$BACKUP_FILE" $PACKAGES
+            ;;
+        5)
+            echo -e "${BLUE}Backing up SMS and Contacts...${ENDC}"
+            $ADB -s $SERIAL backup -f "sms_contacts_$(date +%Y%m%d).ab" com.android.providers.telephony com.android.providers.contacts
+            ;;
+    esac
+    
+    [[ $opt != 6 ]] && read -p "Press Enter..."
+}
+
+settings_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}⚙️  SETTINGS & TOOLS${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    
+    echo -e "${GREEN}Current Configuration:${ENDC}"
+    echo "  ADB: $([[ -n "$ADB" ]] && echo "✓" || echo "✗")"
+    echo "  Fastboot: $([[ -n "$FASTBOOT" ]] && echo "✓" || echo "✗")"
+    echo "  Odin4: $([[ $ODIN4_INSTALLED == true ]] && echo "✓" || echo "✗")"
+    echo "  Heimdall: $([[ $HEIMDALL_INSTALLED == true ]] && echo "✓" || echo "✗")"
+    echo ""
+    
+    echo "1. Reinstall dependencies"
+    echo "2. Install Samsung tools"
+    echo "3. Setup udev rules"
+    echo "4. Install system-wide"
+    echo "5. Check for updates"
+    echo "6. About"
+    echo "7. Back"
+    
+    read -p "Select: " opt
+    
+    case $opt in
+        1) install_dependencies ;;
+        2)
+            install_odin4_auto
+            command -v apt &>/dev/null && sudo apt install heimdall-flash
+            command -v pacman &>/dev/null && sudo pacman -S heimdall
+            ;;
+        3) setup_samsung_udev_rules ;;
+        4) install_systemwide ;;
+        5)
+            echo -e "${BLUE}Checking for updates...${ENDC}"
+            curl -s https://api.github.com/repos/security/pydroidb/releases/latest | grep tag_name || echo "Check manually"
+            ;;
+        6)
+            echo -e "${BOLD}${BLUE}PyDroidB v$VERSION${ENDC}"
+            echo "Advanced Android & Samsung Device Manager"
+            echo ""
+            echo "Features:"
+            echo "  • Full ADB/Fastboot automation"
+            echo "  • Samsung Odin4/Heimdall support"
+            echo "  • Visual file explorer"
+            echo "  • Drag & drop support"
+            echo "  • GSI flashing"
+            echo "  • Device backups"
+            echo ""
+            echo "Security-focused tool for researchers"
+            ;;
+    esac
+    
+    [[ $opt != 7 ]] && read -p "Press Enter..."
+}
+
+# Cleanup on exit
+cleanup() {
+    echo -e "\n${YELLOW}Cleaning up...${ENDC}"
+    [[ -n "$ADB" ]] && $ADB kill-server 2>/dev/null
+    jobs -p | xargs -r kill 2>/dev/null
+}
+
+trap cleanup EXIT
+trap 'echo -e "\n${YELLOW}Interrupted${ENDC}"; exit 130' INT
+
+# Main execution
+main() {
+    # Parse command line arguments
+    parse_arguments "$@"
+    
+    # Check if running with specific flags
+    if [[ "$DIRECT_FASTBOOT" == true ]]; then
+        check_requirements
+        fastboot_operations
+        exit 0
+    elif [[ "$DIRECT_SAMSUNG" == true ]]; then
+        check_requirements
+        samsung_operations_menu
+        exit 0
+    elif [[ "$DIRECT_SHELL" == true ]]; then
+        check_requirements
+        get_device_info
+        [[ -n "$SERIAL" ]] && $ADB -s $SERIAL shell
+        exit 0
+    fi
+    
+    # Check requirements
+    check_requirements
+    
+    # Start main menu
+    main_menu
+}
+
+# Run main function
+main "$@"
