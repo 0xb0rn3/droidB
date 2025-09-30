@@ -32,7 +32,7 @@
 **droidB** is a powerful command-line tool that simplifies Android device management, debugging, and firmware operations. Whether you're a developer, security researcher, or power user, droidB provides an intuitive interface for:
 
 - **Device Management**: Full ADB control with visual file explorer
-- **Firmware Operations**: Flash custom ROMs, stock firmware, and recoveries
+- **Firmware Operations**: Flash custom ROMs, stock firmware, GSI, and recoveries
 - **Samsung Specialization**: Native Odin4 and Heimdall support for Samsung devices
 - **Backup & Recovery**: Complete device backups and app management
 - **Security Operations**: Bootloader management and diagnostics
@@ -44,6 +44,7 @@
 ✅ **Safety First** - Multiple confirmations for dangerous operations  
 ✅ **Cross-Platform** - Works on Linux, macOS, and Windows (WSL)  
 ✅ **Samsung Expert** - Complete Odin/Download mode support  
+✅ **GSI Support** - Full Generic System Image flashing with Treble detection  
 ✅ **Open Source** - MIT licensed, community-driven development
 
 ---
@@ -71,8 +72,9 @@
 **Fastboot Operations**
 - Partition flashing & management
 - Bootloader unlock/lock
-- GSI (Generic System Image) flashing
-- A/B slot management
+- **GSI (Generic System Image) flashing**
+- **Project Treble detection**
+- **A/B slot management**
 - Custom recovery installation
 - Wipe & format operations
 - OEM-specific commands
@@ -179,17 +181,17 @@ droidB automatically installs missing dependencies. Manual installation:
 **Debian/Ubuntu:**
 ```bash
 sudo apt update
-sudo apt install android-tools-adb android-tools-fastboot curl wget unzip
+sudo apt install android-tools-adb android-tools-fastboot curl wget unzip xz-utils
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S android-tools curl wget unzip
+sudo pacman -S android-tools curl wget unzip xz
 ```
 
 **macOS:**
 ```bash
-brew install android-platform-tools curl wget
+brew install android-platform-tools curl wget xz
 ```
 
 **Windows (WSL):**
@@ -207,9 +209,22 @@ When you launch droidB, you'll see a menu like this:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
-║                    droidB v0.1.1                         ║
-║     Advanced Android & Samsung Device Manager            ║
+║                                                          ║
+║     ██████╗ ██████╗  ██████╗ ██╗██████╗ ██████╗        ║
+║     ██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔══██╗       ║
+║     ██║  ██║██████╔╝██║   ██║██║██║  ██║██████╔╝       ║
+║     ██║  ██║██╔══██╗██║   ██║██║██║  ██║██╔══██╗       ║
+║     ██████╔╝██║  ██║╚██████╔╝██║██████╔╝██████╔╝       ║
+║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║
+║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
+
+    Advanced Android & Samsung Device Manager v0.1.1
+    Security-Focused | Drag & Drop | System Integration
+    Developer: 0xbv1 | 0xb0rn3
+    GitHub: https://github.com/0xb0rn3/droidB
+
+════════════════════════════════════════════════════════════
 
 Device: Samsung Galaxy S21 (device)
 
@@ -317,13 +332,66 @@ adb reboot download
 
 #### Installing GSI (Generic System Image)
 
-1. Prepare files:
-   - GSI system image (ARM64 A/B)
-   - Stock vbmeta.img
-2. Boot to fastboot mode
-3. Launch droidB: `./droidB --fastboot`
-4. Select **Option 7** (Flash GSI)
-5. Follow on-screen instructions
+**NEW in v0.1.1:** Comprehensive GSI flashing with automatic checks!
+
+**Prerequisites:**
+- Unlocked bootloader
+- Project Treble support (automatically verified)
+- GSI image matching device architecture (ARM64/ARM32)
+- Stock vbmeta.img file
+
+**Step-by-Step Process:**
+
+1. **Prepare Files:**
+   - Download GSI image from [phhusson's GSI repository](https://github.com/phhusson/treble_experimentations/releases)
+   - Extract vbmeta.img from stock ROM OR droidB can create an empty one
+   - Optional: vendor.img if needed
+
+2. **Boot to Fastboot:**
+   ```bash
+   adb reboot bootloader
+   # Or manually: Power off, hold Vol Down + Power
+   ```
+
+3. **Launch GSI Flash:**
+   ```bash
+   ./droidB --fastboot
+   # Select Option 7 (Flash GSI)
+   ```
+
+4. **Follow the Wizard:**
+   - droidB automatically checks:
+     - ✓ Fastboot mode detection
+     - ✓ Bootloader unlock status
+     - ✓ Device model identification
+   
+5. **Provide Files:**
+   - Drag & drop GSI image (supports .img and .img.xz)
+   - Drag & drop vbmeta.img (or create empty)
+   - Optional: vendor image
+
+6. **Configure Options:**
+   - Wipe userdata (Recommended for first install)
+   - Disable AVB verification (Required for GSI)
+
+7. **Confirm and Flash:**
+   - Review flash plan
+   - Confirm critical warnings
+   - Wait for completion (5-15 minutes)
+
+**Post-Flash:**
+- First boot takes 10-15 minutes
+- Device may reboot multiple times (normal)
+- Some hardware features may not work initially
+- Check XDA forums for device-specific patches
+
+**Flash Log:**
+All operations are logged to `/tmp/gsi_flash.log` for troubleshooting.
+
+**Supported GSI Types:**
+- ARM64 A/B (most modern devices)
+- ARM64 A-only (older devices)
+- ARM32 variants (legacy devices)
 
 ---
 
@@ -337,6 +405,9 @@ adb reboot download
 - **Automatic Backup Reminders** before major operations
 - **Model Verification** before flashing
 - **USB Connection Stability** monitoring
+- **Project Treble Verification** for GSI flashing
+- **Bootloader Lock Detection** prevents dangerous operations
+- **Flash Progress Logging** for troubleshooting
 
 ### Understanding Warnings
 
@@ -346,6 +417,7 @@ adb reboot download
 | 🟡 Knox 0x1 | Samsung warranty void (permanent) | Understand implications |
 | 🟠 BRICK RISK | Wrong firmware can kill device | Verify model number |
 | 🔵 ROOT REQUIRED | Needs elevated permissions | Accept sudo prompt |
+| 🟣 TREBLE REQUIRED | GSI needs Treble support | Verify device compatibility |
 
 ---
 
@@ -425,6 +497,16 @@ adb reboot download       # Download mode (Samsung)
 3. Windows users: Install fastboot drivers
 4. Try: `sudo fastboot devices` (Linux/Mac)
 
+### GSI Flash Issues
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Treble Not Supported | Device lacks Treble | Cannot install GSI |
+| Bootloader Locked | Security protection active | Unlock bootloader first |
+| AVB Disable Failed | Verification protection | Try with empty vbmeta |
+| System Flash Failed | Wrong architecture | Use ARM64 for most devices |
+| First Boot Loop | Normal behavior | Wait 15+ minutes |
+
 ### Flash Failed Errors
 
 | Error | Cause | Solution |
@@ -458,6 +540,21 @@ Fastboot is a protocol for modifying device firmware. Used for:
 - Installing custom recoveries
 - Advanced device repair
 
+### Understanding GSI (Generic System Images)
+
+GSI is a pure AOSP system image that works across multiple devices with Project Treble support.
+
+**Key Concepts:**
+- **Project Treble**: Framework separating vendor implementation from Android framework
+- **VNDK**: Vendor Native Development Kit version
+- **A/B Partitions**: Seamless update mechanism
+- **AVB**: Android Verified Boot (must be disabled for GSI)
+
+**GSI Resources:**
+- [phhusson's GSI](https://github.com/phhusson/treble_experimentations) - Most popular GSI builds
+- [Project Treble](https://source.android.com/docs/core/architecture/treble) - Official documentation
+- [XDA GSI Forum](https://forum.xda-developers.com/c/project-treble.7260/) - Community support
+
 ### Samsung Download Mode
 
 Samsung's proprietary firmware flashing mode. Features:
@@ -469,6 +566,27 @@ Samsung's proprietary firmware flashing mode. Features:
 ---
 
 ## 📱 Device Compatibility
+
+### GSI Compatibility
+
+**Requirements for GSI:**
+- ✅ Android 8.0+ with Project Treble
+- ✅ Unlocked bootloader
+- ✅ ARM64 or ARM32 architecture
+
+**Check Treble Support:**
+```bash
+adb shell getprop ro.treble.enabled
+# Should return: true
+```
+
+**Highly Compatible Devices:**
+- Google Pixel series (Pixel 2+)
+- OnePlus 5T and newer
+- Xiaomi Mi A series
+- Essential Phone
+- Lenovo P11 Gen 2
+- Most devices from 2018+
 
 ### Samsung Devices
 
@@ -505,7 +623,7 @@ We welcome contributions! Here's how you can help:
 ### Reporting Issues
 1. Check existing issues first
 2. Provide device model and Android version
-3. Include error messages and logs
+3. Include error messages and logs (`/tmp/gsi_flash.log` for GSI issues)
 4. Describe steps to reproduce
 
 ### Adding Device Support
@@ -548,6 +666,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 
 - **General Issues**: [GitHub Issues](https://github.com/0xb0rn3/droidB/issues)
 - **Samsung Support**: [Samsung Issues](https://github.com/0xb0rn3/droidB/issues?q=label%3Asamsung)
+- **GSI Support**: [GSI Issues](https://github.com/0xb0rn3/droidB/issues?q=label%3Agsi)
 - **Discussions**: [GitHub Discussions](https://github.com/0xb0rn3/droidB/discussions)
 
 ### Useful Resources
@@ -555,6 +674,11 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 **Firmware Sources:**
 - [SamMobile](https://www.sammobile.com/firmware/) - Samsung firmware database
 - [Frija Tool](https://forum.xda-developers.com/t/tool-frija-samsung-firmware-downloader-checker.3910594/) - Firmware downloader
+
+**GSI Sources:**
+- [phhusson's GSI](https://github.com/phhusson/treble_experimentations/releases) - Official GSI builds
+- [Andy Yan's GSI](https://sourceforge.net/projects/andyyan-gsi/) - Alternative builds
+- [LineageOS GSI](https://sourceforge.net/projects/andyyan-gsi/files/lineage-19.x/) - LineageOS-based GSI
 
 **Community:**
 - [XDA Developers](https://forum.xda-developers.com/) - Android development forum
@@ -599,6 +723,8 @@ Users are responsible for:
 5. **Be Patient** - Some operations take 20+ minutes
 6. **Read Warnings** - Every warning is there for a reason
 7. **Test with Simple Tasks First** - Get comfortable before advanced operations
+8. **Check Treble Before GSI** - Verify compatibility first
+9. **Save Flash Logs** - Keep `/tmp/gsi_flash.log` for troubleshooting
 
 ### ❌ Common Mistakes to Avoid
 
@@ -609,18 +735,24 @@ Users are responsible for:
 5. ❌ Not backing up data
 6. ❌ Ignoring error messages
 7. ❌ Rushing through confirmations
+8. ❌ Flashing GSI on non-Treble devices
+9. ❌ Using wrong architecture GSI
 
 ---
 
 ## 📊 Version History
 
-### v0.1.1 (Current)
-- ✨ Rebranded from PyDroidB to droidB
-- 🎨 Enhanced UI with improved banner
-- 📝 Updated developer information
-- 💅 Polished user interface elements
-- 🐛 Improved error messages
-- 📢 Better visual feedback
+### v0.1.1 (Current - Latest | Stable)
+- ✨ Complete GSI flashing system
+- 🔍 Automatic Project Treble detection
+- 🛡️ Pre-flight safety checks (bootloader, fastboot mode)
+- 📦 Compressed image support (.img.xz)
+- 🎨 Step-by-step progress indicators
+- 📝 Comprehensive flash logging
+- 🔧 Empty vbmeta creation option
+- 💾 Optional vendor image flashing
+- ⚡ AVB verification disable
+- 🐛 Error handling and recovery
 - 📚 Enhanced documentation
 
 ### v0.1.0
@@ -639,6 +771,7 @@ Users are responsible for:
 - **Samsung Open Source** - Download mode protocols
 - **Odin4Linux Team** - Modern Odin implementation
 - **Heimdall Project** - Cross-platform Samsung support
+- **phhusson** - GSI development and Project Treble work
 - **XDA Developers** - Android development community
 - **SamMobile** - Firmware database and tools
 - **AOSP** - Android Debug Bridge and Fastboot tools
