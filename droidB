@@ -6,7 +6,7 @@
 # GitHub: https://github.com/0xb0rn3/droidB
 # License: MIT
 
-set -uo pipefail  # Removed 'e' flag to handle errors more gracefully
+set -uo pipefail 
 
 VERSION="0.1.1 Latest | Stable"
 SCRIPT_NAME="droidB"
@@ -30,8 +30,9 @@ FASTBOOT_TIMEOUT=600
 SAMSUNG_FLASH_TIMEOUT=1800
 SAMSUNG_PIT_TIMEOUT=300
 SAMSUNG_NAND_TIMEOUT=3600
+GSI_FLASH_TIMEOUT=900
 
-# Global variables - Initialize to prevent unbound errors
+# Global variables
 SAMSUNG_VENDOR_ID="04e8"
 ODIN4_INSTALLED=false
 HEIMDALL_INSTALLED=false
@@ -46,30 +47,30 @@ ADB=""
 FASTBOOT=""
 DEVICE_INFO=""
 
+# GSI-specific variables
+GSI_ARCH=""
+DEVICE_SLOT=""
+TREBLE_ENABLED=false
+
 # Installation function
 install_systemwide() {
     echo -e "${BOLD}${GREEN}droidB System-Wide Installation${ENDC}"
     echo -e "${BLUE}Installing droidB to $INSTALL_DIR...${ENDC}"
     
-    # Check if running as root for installation
     if [[ $EUID -ne 0 ]]; then
         echo -e "${YELLOW}Root privileges required for system installation.${ENDC}"
         echo -e "${BLUE}Attempting sudo installation...${ENDC}"
         
-        # Self-elevate with sudo
         sudo cp "$0" "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null || {
             echo -e "${RED}Failed to install. Please run: sudo $0 --install${ENDC}"
             exit 1
         }
         sudo chmod +x "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null
-        
-        # Create symbolic link for convenience
         sudo ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "/usr/bin/$SCRIPT_NAME" 2>/dev/null || true
         
         echo -e "${GREEN}✓ droidB installed successfully!${ENDC}"
         echo -e "${GREEN}You can now run it from anywhere with: ${BOLD}$SCRIPT_NAME${ENDC}"
     else
-        # Running as root
         cp "$0" "$INSTALL_DIR/$SCRIPT_NAME"
         chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
         ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "/usr/bin/$SCRIPT_NAME" 2>/dev/null || true
@@ -78,10 +79,7 @@ install_systemwide() {
         echo -e "${GREEN}You can now run it from anywhere with: ${BOLD}$SCRIPT_NAME${ENDC}"
     fi
     
-    # Create desktop entry for GUI launchers
     create_desktop_entry
-    
-    # Setup completion
     setup_bash_completion
     
     echo -e "${CYAN}Installation complete! Features:${ENDC}"
@@ -135,7 +133,6 @@ EOF
     fi
 }
 
-# Uninstall function
 uninstall_systemwide() {
     echo -e "${BOLD}${RED}droidB Uninstallation${ENDC}"
     
@@ -145,7 +142,6 @@ uninstall_systemwide() {
         exit 0
     fi
     
-    # Remove files
     rm -f "$INSTALL_DIR/$SCRIPT_NAME" 2>/dev/null
     rm -f "/usr/bin/$SCRIPT_NAME" 2>/dev/null
     rm -f "/usr/share/applications/droidb.desktop" 2>/dev/null
@@ -155,7 +151,6 @@ uninstall_systemwide() {
     exit 0
 }
 
-# Command line argument parsing
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -235,7 +230,7 @@ EOF
 
 clear_screen() {
     clear
-    echo -ne "\033]0;droidB v$VERSION\007"  # Set terminal title
+    echo -ne "\033]0;droidB v$VERSION\007"
 }
 
 display_banner() {
@@ -261,22 +256,17 @@ EOF
     echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
 }
 
-# Enhanced path processing for drag & drop
 process_path() {
     local input="$1"
-    # Remove quotes and escape characters from drag & drop
     input="${input#\'}"
     input="${input%\'}"
     input="${input#\"}"
     input="${input%\"}"
-    # Handle spaces in paths
     input="${input//\\ / }"
-    # Expand tilde to home directory
     input="${input/#\~/$HOME}"
     echo "$input"
 }
 
-# Device file explorer with visual navigation
 device_file_explorer() {
     local current_path="${1:-/sdcard}"
     local selected_file=""
@@ -287,7 +277,6 @@ device_file_explorer() {
         echo -e "${GREEN}Current Path: ${BOLD}$current_path${ENDC}"
         echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
         
-        # List directory contents with details
         echo -e "${BLUE}Fetching directory contents...${ENDC}"
         local contents=$($ADB -s $SERIAL shell ls -la "$current_path" 2>/dev/null | tail -n +2)
         
@@ -298,7 +287,6 @@ device_file_explorer() {
             continue
         fi
         
-        # Parse and display contents
         local dirs=()
         local files=()
         local index=1
@@ -348,10 +336,8 @@ device_file_explorer() {
         case "$choice" in
             [0-9]*)
                 if [[ $choice -le ${#dirs[@]} ]]; then
-                    # Navigate to directory
                     current_path="$current_path/${dirs[$choice-1]}"
                 elif [[ $choice -le $((${#dirs[@]} + ${#files[@]})) ]]; then
-                    # File selected - show options
                     local file_index=$((choice - ${#dirs[@]} - 1))
                     selected_file="${files[$file_index]}"
                     handle_selected_file "$current_path/$selected_file"
@@ -392,7 +378,6 @@ device_file_explorer() {
                 return
                 ;;
             *)
-                # Check if it's a path (drag & drop)
                 if [[ -e "$(process_path "$choice")" ]]; then
                     local processed_path=$(process_path "$choice")
                     echo -e "${GREEN}Detected file: $processed_path${ENDC}"
@@ -523,14 +508,12 @@ delete_from_device() {
     fi
 }
 
-# Samsung Odin4 operations
 install_odin4_auto() {
     if [[ "$OSTYPE" != "linux-gnu"* ]]; then
         echo -e "${YELLOW}Odin4 is only available for Linux.${ENDC}"
         return 1
     fi
     
-    # Check if already installed
     if command -v odin4 &>/dev/null; then
         echo -e "${GREEN}Odin4 already installed.${ENDC}"
         ODIN4_INSTALLED=true
@@ -539,7 +522,6 @@ install_odin4_auto() {
     
     echo -e "${BLUE}Installing Odin4 for Linux...${ENDC}"
     
-    # Try package managers first
     if command -v yay &>/dev/null; then
         echo -e "${BLUE}Installing via AUR (yay)...${ENDC}"
         yay -S --noconfirm odin4-cli 2>/dev/null && ODIN4_INSTALLED=true
@@ -547,7 +529,6 @@ install_odin4_auto() {
         echo -e "${BLUE}Installing via AUR (paru)...${ENDC}"
         paru -S --noconfirm odin4-cli 2>/dev/null && ODIN4_INSTALLED=true
     else
-        # Download from GitHub
         echo -e "${BLUE}Downloading Odin4 from GitHub...${ENDC}"
         ODIN_URL="https://github.com/Adrilaw/OdinV4/releases/download/v1.0/odin.zip"
         TEMP_DIR=$(mktemp -d)
@@ -572,7 +553,6 @@ install_odin4_auto() {
         fi
     fi
     
-    # Setup udev rules for Samsung
     setup_samsung_udev_rules
     
     return $([[ $ODIN4_INSTALLED == true ]] && echo 0 || echo 1)
@@ -597,15 +577,12 @@ EOF
         
         sudo udevadm control --reload-rules
         sudo udevadm trigger
-        
-        # Add user to plugdev
         sudo usermod -a -G plugdev $USER 2>/dev/null
         
         echo -e "${GREEN}Samsung USB rules configured${ENDC}"
     fi
 }
 
-# Enhanced Samsung flash with drag & drop
 samsung_flash_with_odin() {
     clear_screen
     echo -e "${BOLD}${MAGENTA}Samsung Firmware Flash (Odin4)${ENDC}"
@@ -613,7 +590,6 @@ samsung_flash_with_odin() {
     echo -e "${CYAN}Drag & drop .tar/.tar.md5 files or type paths${ENDC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
     
-    # File inputs with drag & drop support
     echo -e "\n${BOLD}Firmware Files:${ENDC}"
     
     echo -e "${BLUE}BL (Bootloader):${ENDC}"
@@ -636,28 +612,24 @@ samsung_flash_with_odin() {
     read -p "Path (optional, use instead of CSC to keep data): " HOME_CSC_FILE
     HOME_CSC_FILE=$(process_path "$HOME_CSC_FILE")
     
-    # Validate required file
     if [[ -z "$AP_FILE" || ! -f "$AP_FILE" ]]; then
         echo -e "${RED}AP file is required for flashing${ENDC}"
         read -p "Press Enter..."
         return
     fi
     
-    # Build Odin4 command
     local ODIN_CMD="sudo odin4"
     
     [[ -n "$BL_FILE" && -f "$BL_FILE" ]] && ODIN_CMD="$ODIN_CMD -b \"$BL_FILE\""
     [[ -n "$AP_FILE" && -f "$AP_FILE" ]] && ODIN_CMD="$ODIN_CMD -a \"$AP_FILE\""
     [[ -n "$CP_FILE" && -f "$CP_FILE" ]] && ODIN_CMD="$ODIN_CMD -c \"$CP_FILE\""
     
-    # Use HOME_CSC if provided, otherwise regular CSC
     if [[ -n "$HOME_CSC_FILE" && -f "$HOME_CSC_FILE" ]]; then
         ODIN_CMD="$ODIN_CMD -s \"$HOME_CSC_FILE\""
     elif [[ -n "$CSC_FILE" && -f "$CSC_FILE" ]]; then
         ODIN_CMD="$ODIN_CMD -s \"$CSC_FILE\""
     fi
     
-    # Show flash summary
     echo -e "\n${BOLD}${YELLOW}Flash Summary:${ENDC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     [[ -n "$BL_FILE" && -f "$BL_FILE" ]] && echo -e "BL: ${GREEN}$(basename "$BL_FILE")${ENDC}"
@@ -685,25 +657,21 @@ samsung_flash_with_odin() {
     read -p "Press Enter to continue..."
 }
 
-# Initialize dependencies
 check_requirements() {
     echo -e "${BLUE}Checking requirements...${ENDC}"
     
-    # Check for ADB
     if ! command -v adb &>/dev/null; then
         echo -e "${YELLOW}ADB not found. Installing...${ENDC}"
         install_dependencies
     fi
     ADB=$(command -v adb)
     
-    # Check for Fastboot
     if ! command -v fastboot &>/dev/null; then
         echo -e "${YELLOW}Fastboot not found. Installing...${ENDC}"
         install_dependencies
     fi
     FASTBOOT=$(command -v fastboot)
     
-    # Check versions
     if [[ -n "$ADB" ]]; then
         ADB_VERSION=$($ADB version 2>/dev/null | head -1)
         echo -e "${GREEN}✓ ADB: $ADB_VERSION${ENDC}"
@@ -714,10 +682,8 @@ check_requirements() {
         echo -e "${GREEN}✓ Fastboot: $FASTBOOT_VERSION${ENDC}"
     fi
     
-    # Start ADB server
     $ADB start-server &>/dev/null
     
-    # Check for Samsung tools
     check_samsung_tools
 }
 
@@ -744,7 +710,6 @@ install_dependencies() {
 }
 
 check_samsung_tools() {
-    # Check Odin4
     if command -v odin4 &>/dev/null; then
         ODIN4_INSTALLED=true
         echo -e "${GREEN}✓ Odin4: Installed${ENDC}"
@@ -752,12 +717,39 @@ check_samsung_tools() {
         echo -e "${YELLOW}⚠ Odin4: Not installed (Samsung features limited)${ENDC}"
     fi
     
-    # Check Heimdall
     if command -v heimdall &>/dev/null; then
         HEIMDALL_INSTALLED=true
         echo -e "${GREEN}✓ Heimdall: Installed${ENDC}"
     else
         echo -e "${YELLOW}⚠ Heimdall: Not installed (Samsung features limited)${ENDC}"
+    fi
+}
+
+check_treble_support() {
+    echo -e "${BLUE}Checking Project Treble support...${ENDC}"
+    
+    local vndk_version=$($ADB -s $SERIAL shell getprop ro.vndk.version 2>/dev/null | tr -d '\r')
+    local treble_enabled=$($ADB -s $SERIAL shell getprop ro.treble.enabled 2>/dev/null | tr -d '\r')
+    
+    if [[ "$treble_enabled" == "true" ]] || [[ -n "$vndk_version" ]]; then
+        TREBLE_ENABLED=true
+        echo -e "${GREEN}✓ Project Treble: SUPPORTED (VNDK: $vndk_version)${ENDC}"
+    else
+        TREBLE_ENABLED=false
+        echo -e "${RED}✗ Project Treble: NOT SUPPORTED${ENDC}"
+        echo -e "${YELLOW}Warning: GSI flashing requires Treble support${ENDC}"
+    fi
+    
+    GSI_ARCH=$($ADB -s $SERIAL shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')
+    echo -e "${GREEN}Architecture: $GSI_ARCH${ENDC}"
+    
+    local slot_suffix=$($ADB -s $SERIAL shell getprop ro.boot.slot_suffix 2>/dev/null | tr -d '\r')
+    if [[ -n "$slot_suffix" ]]; then
+        DEVICE_SLOT="A/B"
+        echo -e "${GREEN}Partition Scheme: A/B (Current: $slot_suffix)${ENDC}"
+    else
+        DEVICE_SLOT="A-only"
+        echo -e "${YELLOW}Partition Scheme: A-only${ENDC}"
     fi
 }
 
@@ -767,7 +759,6 @@ confirm_action() {
     [[ "$response" =~ ^[Yy]$ ]]
 }
 
-# Device detection and info
 get_device_info() {
     DEVICES=$($ADB devices 2>/dev/null | tail -n +2 | grep -v "^$")
     
@@ -777,7 +768,6 @@ get_device_info() {
         return 1
     fi
     
-    # Handle multiple devices
     DEVICE_COUNT=$(echo "$DEVICES" | wc -l)
     
     if [[ $DEVICE_COUNT -gt 1 ]]; then
@@ -789,7 +779,6 @@ get_device_info() {
         SERIAL=$(echo "$DEVICES" | awk '{print $1}')
     fi
     
-    # Get device details
     STATE=$($ADB devices | grep $SERIAL | awk '{print $2}')
     
     if [[ "$STATE" == "unauthorized" ]]; then
@@ -823,7 +812,6 @@ display_device_info() {
         echo -e "${GREEN}Architecture:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'architecture=\K[^ ]+')"
         echo -e "${GREEN}State:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'state=\K[^ ]+')"
         
-        # Additional info
         BATTERY=$($ADB -s $SERIAL shell dumpsys battery | grep level | head -1 | awk '{print $2}')
         [[ -n "$BATTERY" ]] && echo -e "${GREEN}Battery:${ENDC}          $BATTERY%"
         
@@ -835,7 +823,6 @@ display_device_info() {
     read -p "Press Enter to continue..."
 }
 
-# Enhanced file operations
 backup_device() {
     clear_screen
     echo -e "${BOLD}${CYAN}📦 DEVICE BACKUP${ENDC}"
@@ -879,13 +866,227 @@ backup_device() {
     read -p "Press Enter..."
 }
 
-# Fastboot operations
+flash_gsi() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${CYAN}              GSI FLASH UTILITY                    ${ENDC}"
+    echo -e "${BOLD}${CYAN}════════════════════════════════════════════════════${ENDC}"
+    
+    FASTBOOT_DEVICES=$($FASTBOOT devices 2>/dev/null)
+    if [[ -z "$FASTBOOT_DEVICES" ]]; then
+        echo -e "${RED}✗ Device not in fastboot mode${ENDC}"
+        echo -e "${CYAN}Please boot device into fastboot mode:${ENDC}"
+        echo -e "  1. Power off device"
+        echo -e "  2. Hold Volume Down + Power"
+        echo -e "  3. Or use: adb reboot bootloader"
+        read -p "Press Enter when ready..."
+        return
+    fi
+    echo -e "${GREEN}✓ Device in fastboot mode${ENDC}"
+    
+    local unlock_status=$($FASTBOOT getvar unlocked 2>&1 | grep "unlocked:" | awk '{print $2}')
+    if [[ "$unlock_status" != "yes" ]]; then
+        echo -e "${RED}✗ Bootloader is LOCKED${ENDC}"
+        echo -e "${YELLOW}You must unlock the bootloader first!${ENDC}"
+        read -p "Press Enter to continue..."
+        return
+    fi
+    echo -e "${GREEN}✓ Bootloader unlocked${ENDC}"
+    
+    local product=$($FASTBOOT getvar product 2>&1 | grep "product:" | awk '{print $2}')
+    echo -e "${GREEN}✓ Device: $product${ENDC}"
+    
+    echo -e "\n${BOLD}${YELLOW}GSI Requirements:${ENDC}"
+    echo -e "  • ARM64 architecture"
+    echo -e "  • A/B or A-only variant"
+    echo -e "  • VNDK-compatible GSI"
+    echo -e "  • Stock vbmeta.img file"
+    
+    echo -e "\n${BOLD}${CYAN}File Selection (Drag & Drop Supported):${ENDC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────${ENDC}"
+    
+    echo -e "\n${BOLD}1. GSI System Image${ENDC}"
+    echo -e "${CYAN}Supported formats: .img, .img.xz${ENDC}"
+    read -p "GSI image path: " GSI_IMAGE
+    GSI_IMAGE=$(process_path "$GSI_IMAGE")
+    
+    if [[ ! -f "$GSI_IMAGE" ]]; then
+        echo -e "${RED}Error: GSI image not found${ENDC}"
+        read -p "Press Enter..."
+        return
+    fi
+    
+    if [[ "$GSI_IMAGE" == *.xz ]]; then
+        echo -e "${BLUE}Decompressing GSI image...${ENDC}"
+        xz -d -k "$GSI_IMAGE"
+        GSI_IMAGE="${GSI_IMAGE%.xz}"
+    fi
+    
+    echo -e "${GREEN}✓ GSI: $(basename "$GSI_IMAGE") ($(du -h "$GSI_IMAGE" | cut -f1))${ENDC}"
+    
+    echo -e "\n${BOLD}2. VBMeta Image (Stock)${ENDC}"
+    echo -e "${CYAN}Required for disabling verified boot${ENDC}"
+    read -p "vbmeta.img path: " VBMETA_IMAGE
+    VBMETA_IMAGE=$(process_path "$VBMETA_IMAGE")
+    
+    if [[ ! -f "$VBMETA_IMAGE" ]]; then
+        echo -e "${RED}Error: vbmeta image not found${ENDC}"
+        echo -e "${YELLOW}You can extract vbmeta from stock ROM or use empty vbmeta${ENDC}"
+        read -p "Create empty vbmeta? (y/N): " create_vbmeta
+        
+        if [[ "$create_vbmeta" =~ ^[Yy]$ ]]; then
+            dd if=/dev/zero of=/tmp/vbmeta_empty.img bs=1024 count=64 2>/dev/null
+            VBMETA_IMAGE="/tmp/vbmeta_empty.img"
+            echo -e "${GREEN}✓ Created empty vbmeta${ENDC}"
+        else
+            read -p "Press Enter..."
+            return
+        fi
+    else
+        echo -e "${GREEN}✓ VBMeta: $(basename "$VBMETA_IMAGE")${ENDC}"
+    fi
+    
+    echo -e "\n${BOLD}3. Vendor Image (Optional)${ENDC}"
+    echo -e "${CYAN}Leave empty to keep stock vendor${ENDC}"
+    read -p "vendor.img path (press Enter to skip): " VENDOR_IMAGE
+    VENDOR_IMAGE=$(process_path "$VENDOR_IMAGE")
+    
+    if [[ -n "$VENDOR_IMAGE" ]] && [[ -f "$VENDOR_IMAGE" ]]; then
+        echo -e "${GREEN}✓ Vendor: $(basename "$VENDOR_IMAGE")${ENDC}"
+        FLASH_VENDOR=true
+    else
+        echo -e "${YELLOW}⚠ Using stock vendor${ENDC}"
+        FLASH_VENDOR=false
+    fi
+    
+    echo -e "\n${BOLD}${YELLOW}Flash Options:${ENDC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────${ENDC}"
+    
+    read -p "Wipe userdata? (Recommended for first install) (Y/n): " WIPE_DATA
+    WIPE_DATA=${WIPE_DATA:-Y}
+    
+    read -p "Disable AVB verification? (Required for GSI) (Y/n): " DISABLE_AVB
+    DISABLE_AVB=${DISABLE_AVB:-Y}
+    
+    echo -e "\n${BOLD}${CYAN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${YELLOW}FLASH PLAN:${ENDC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "  1. Reboot to bootloader"
+    [[ "$DISABLE_AVB" =~ ^[Yy]$ ]] && echo -e "  2. Disable AVB verification"
+    echo -e "  3. Flash vbmeta"
+    echo -e "  4. Erase system partition"
+    echo -e "  5. Flash GSI to system"
+    [[ "$FLASH_VENDOR" == true ]] && echo -e "  6. Flash vendor"
+    [[ "$WIPE_DATA" =~ ^[Yy]$ ]] && echo -e "  7. Wipe userdata"
+    echo -e "  8. Reboot to system"
+    echo -e "${CYAN}════════════════════════════════════════════════════${ENDC}"
+    
+    echo -e "\n${RED}${BOLD}⚠️  CRITICAL WARNING ⚠️${ENDC}"
+    echo -e "${RED}This will REPLACE your system partition!${ENDC}"
+    echo -e "${RED}First boot may take 10-15 minutes${ENDC}"
+    echo -e "${RED}Some features may not work (camera, fingerprint, etc.)${ENDC}"
+    
+    confirm_action "Proceed with GSI flash?" || return
+    
+    echo -e "\n${BOLD}${BLUE}Starting GSI Flash Sequence...${ENDC}"
+    echo -e "${CYAN}════════════════════════════════════════════════════${ENDC}\n"
+    
+    echo -e "${YELLOW}[1/8]${ENDC} ${BLUE}Rebooting to bootloader...${ENDC}"
+    $FASTBOOT reboot-bootloader
+    sleep 3
+    
+    if [[ "$DISABLE_AVB" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}[2/8]${ENDC} ${BLUE}Disabling AVB verification...${ENDC}"
+        $FASTBOOT --disable-verity --disable-verification flash vbmeta "$VBMETA_IMAGE" 2>&1 | tee /tmp/gsi_flash.log
+        
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo -e "${RED}✗ Failed to disable AVB${ENDC}"
+            read -p "Continue anyway? (y/N): " cont
+            [[ ! "$cont" =~ ^[Yy]$ ]] && return
+        else
+            echo -e "${GREEN}✓ AVB disabled${ENDC}"
+        fi
+    fi
+    
+    echo -e "${YELLOW}[3/8]${ENDC} ${BLUE}Flashing vbmeta...${ENDC}"
+    $FASTBOOT flash vbmeta "$VBMETA_IMAGE" 2>&1 | tee -a /tmp/gsi_flash.log
+    
+    if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+        echo -e "${RED}✗ vbmeta flash failed${ENDC}"
+        read -p "Press Enter..."
+        return
+    fi
+    echo -e "${GREEN}✓ vbmeta flashed${ENDC}"
+    
+    echo -e "${YELLOW}[4/8]${ENDC} ${BLUE}Erasing system partition...${ENDC}"
+    $FASTBOOT erase system 2>&1 | tee -a /tmp/gsi_flash.log || {
+        echo -e "${YELLOW}⚠ Erase failed, trying format...${ENDC}"
+        $FASTBOOT format:ext4 system 2>&1 | tee -a /tmp/gsi_flash.log
+    }
+    echo -e "${GREEN}✓ System partition cleared${ENDC}"
+    
+    echo -e "${YELLOW}[5/8]${ENDC} ${BLUE}Flashing GSI (this may take several minutes)...${ENDC}"
+    echo -e "${CYAN}Please wait patiently...${ENDC}"
+    
+    $FASTBOOT flash system "$GSI_IMAGE" 2>&1 | while read line; do
+        echo -e "${GREEN}$line${ENDC}"
+        echo "$line" >> /tmp/gsi_flash.log
+    done
+    
+    if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+        echo -e "${RED}✗ GSI flash failed!${ENDC}"
+        echo -e "${YELLOW}Check /tmp/gsi_flash.log for details${ENDC}"
+        read -p "Press Enter..."
+        return
+    fi
+    echo -e "${GREEN}✓ GSI flashed successfully${ENDC}"
+    
+    if [[ "$FLASH_VENDOR" == true ]]; then
+        echo -e "${YELLOW}[6/8]${ENDC} ${BLUE}Flashing vendor...${ENDC}"
+        $FASTBOOT flash vendor "$VENDOR_IMAGE" 2>&1 | tee -a /tmp/gsi_flash.log
+        
+        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo -e "${YELLOW}⚠ Vendor flash failed (may not be critical)${ENDC}"
+        else
+            echo -e "${GREEN}✓ Vendor flashed${ENDC}"
+        fi
+    fi
+    
+    if [[ "$WIPE_DATA" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}[7/8]${ENDC} ${BLUE}Wiping userdata...${ENDC}"
+        $FASTBOOT -w 2>&1 | tee -a /tmp/gsi_flash.log
+        echo -e "${GREEN}✓ Userdata wiped${ENDC}"
+    fi
+    
+    echo -e "${YELLOW}[8/8]${ENDC} ${BLUE}Rebooting to system...${ENDC}"
+    
+    echo -e "\n${GREEN}${BOLD}════════════════════════════════════════════${ENDC}"
+    echo -e "${GREEN}${BOLD}   ✓ GSI FLASH COMPLETED SUCCESSFULLY!     ${ENDC}"
+    echo -e "${GREEN}${BOLD}════════════════════════════════════════════${ENDC}\n"
+    
+    echo -e "${YELLOW}Important Notes:${ENDC}"
+    echo -e "  • First boot will take 10-15 minutes"
+    echo -e "  • Device will reboot multiple times (normal)"
+    echo -e "  • Wait for Android setup screen"
+    echo -e "  • Some features may not work initially"
+    echo -e "  • Check XDA forums for device-specific fixes"
+    
+    echo -e "\n${CYAN}Flash log saved to: /tmp/gsi_flash.log${ENDC}"
+    
+    read -p "Reboot now? (Y/n): " do_reboot
+    if [[ ! "$do_reboot" =~ ^[Nn]$ ]]; then
+        $FASTBOOT reboot
+        echo -e "${BLUE}Device rebooting...${ENDC}"
+    fi
+    
+    read -p "Press Enter to continue..."
+}
+
 fastboot_operations() {
     clear_screen
     echo -e "${BOLD}${RED}⚠️  FASTBOOT MODE ⚠️${ENDC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
     
-    # Check for fastboot devices
     FASTBOOT_DEVICES=$($FASTBOOT devices 2>/dev/null)
     
     if [[ -z "$FASTBOOT_DEVICES" ]]; then
@@ -914,31 +1115,17 @@ fastboot_operations() {
     read -p "Select option: " choice
     
     case $choice in
-        1)
-            flash_partition
-            ;;
-        2)
-            boot_image
-            ;;
-        3)
-            bootloader_operations
-            ;;
+        1) flash_partition ;;
+        2) boot_image ;;
+        3) bootloader_operations ;;
         4)
             $FASTBOOT getvar all 2>&1 | grep -v "< waiting"
             read -p "Press Enter..."
             ;;
-        5)
-            format_partition
-            ;;
-        6)
-            erase_partition
-            ;;
-        7)
-            flash_gsi
-            ;;
-        8)
-            fastboot_reboot_menu
-            ;;
+        5) format_partition ;;
+        6) erase_partition ;;
+        7) flash_gsi ;;
+        8) fastboot_reboot_menu ;;
     esac
 }
 
@@ -1032,63 +1219,6 @@ erase_partition() {
     read -p "Press Enter..."
 }
 
-flash_gsi() {
-    clear_screen
-    echo -e "${BOLD}${CYAN}Flash GSI (Generic System Image)${ENDC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
-    echo -e "${CYAN}Based on your GSI flash recovery documentation${ENDC}"
-    echo ""
-    
-    echo -e "${YELLOW}Requirements:${ENDC}"
-    echo "  • Unlocked bootloader"
-    echo "  • Stock vbmeta.img"
-    echo "  • GSI image (ARM64 A/B)"
-    echo ""
-    
-    echo -e "${YELLOW}Drag & drop files or type paths:${ENDC}"
-    
-    read -p "GSI image: " GSI
-    GSI=$(process_path "$GSI")
-    
-    read -p "vbmeta.img: " VBMETA
-    VBMETA=$(process_path "$VBMETA")
-    
-    if [[ ! -f "$GSI" || ! -f "$VBMETA" ]]; then
-        echo -e "${RED}Required files not found${ENDC}"
-        sleep 2
-        return
-    fi
-    
-    echo -e "\n${BOLD}Flash sequence:${ENDC}"
-    echo "1. Flash stock vbmeta"
-    echo "2. Flash GSI to system"
-    echo "3. Disable vbmeta verification"
-    echo "4. Format userdata"
-    echo "5. Reboot"
-    
-    confirm_action "Proceed with GSI flash?" || return
-    
-    # Execute flash sequence
-    echo -e "${BLUE}Step 1: Flashing vbmeta...${ENDC}"
-    $FASTBOOT flash vbmeta_a "$VBMETA"
-    $FASTBOOT flash vbmeta_b "$VBMETA"
-    
-    echo -e "${BLUE}Step 2: Flashing GSI...${ENDC}"
-    $FASTBOOT flash system "$GSI"
-    
-    echo -e "${BLUE}Step 3: Disabling vbmeta verification...${ENDC}"
-    $FASTBOOT --disable-verity --disable-verification flash vbmeta_a "$VBMETA"
-    $FASTBOOT --disable-verity --disable-verification flash vbmeta_b "$VBMETA"
-    
-    echo -e "${BLUE}Step 4: Formatting userdata...${ENDC}"
-    $FASTBOOT format userdata
-    
-    echo -e "${GREEN}GSI flash completed!${ENDC}"
-    read -p "Press Enter to reboot..."
-    
-    $FASTBOOT reboot
-}
-
 fastboot_reboot_menu() {
     echo -e "${BOLD}Reboot Options${ENDC}"
     echo "1. Reboot to system"
@@ -1108,13 +1238,11 @@ fastboot_reboot_menu() {
     esac
 }
 
-# Main menu system
 main_menu() {
     while true; do
         clear_screen
         display_banner
         
-        # Get device info
         get_device_info 2>/dev/null
         
         if [[ -n "$DEVICE_INFO" ]]; then
@@ -1508,10 +1636,10 @@ settings_menu() {
         4) install_systemwide ;;
         5)
             echo -e "${BLUE}Checking for updates...${ENDC}"
-            curl -s https://api.github.com/repos/security/pydroidb/releases/latest | grep tag_name || echo "Check manually"
+            curl -s https://api.github.com/repos/0xb0rn3/droidB/releases/latest | grep tag_name || echo "Check manually at https://github.com/0xb0rn3/droidB"
             ;;
         6)
-            echo -e "${BOLD}${BLUE}PyDroidB v$VERSION${ENDC}"
+            echo -e "${BOLD}${BLUE}droidB v$VERSION${ENDC}"
             echo "Advanced Android & Samsung Device Manager"
             echo ""
             echo "Features:"
@@ -1523,13 +1651,15 @@ settings_menu() {
             echo "  • Device backups"
             echo ""
             echo "Security-focused tool for researchers"
+            echo ""
+            echo -e "${MAGENTA}Developer: 0xbv1 | 0xb0rn3${ENDC}"
+            echo -e "${CYAN}GitHub: https://github.com/0xb0rn3/droidB${ENDC}"
             ;;
     esac
     
     [[ $opt != 7 ]] && read -p "Press Enter..."
 }
 
-# Cleanup on exit
 cleanup() {
     echo -e "\n${YELLOW}Cleaning up...${ENDC}"
     [[ -n "$ADB" ]] && $ADB kill-server 2>/dev/null
@@ -1539,12 +1669,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'echo -e "\n${YELLOW}Interrupted${ENDC}"; exit 130' INT
 
-# Main execution
 main() {
-    # Parse command line arguments
     parse_arguments "$@"
     
-    # Check if running with specific flags
     if [[ "$DIRECT_FASTBOOT" == true ]]; then
         check_requirements
         fastboot_operations
@@ -1560,12 +1687,8 @@ main() {
         exit 0
     fi
     
-    # Check requirements
     check_requirements
-    
-    # Start main menu
     main_menu
 }
 
-# Run main function
 main "$@"
