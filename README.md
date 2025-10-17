@@ -534,7 +534,7 @@ When you launch droidB, you'll see a menu like this:
 ║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
-    Advanced Android Device Manager v0.2.0
+    Advanced Android Device Manager v0.2.1
     Universal Debloater | Samsung Tools | Security-Focused
     Developer: 0xbv1 | 0xb0rn3
     GitHub: https://github.com/0xb0rn3/droidB
@@ -787,7 +787,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 
 ## 📊 Version History
 
-### v0.2.0 (Current - Latest | Stable)
+### v0.2.1 (Current - Latest | Stable)
 - 🗑️ **NEW: Universal Debloater**
   - 100+ embedded bloatware packages
   - One-click removal
