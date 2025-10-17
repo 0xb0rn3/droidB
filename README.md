@@ -4,16 +4,16 @@
 
 ![droidB Banner](https://img.shields.io/badge/droidB-Advanced%20Android%20Tool-blue?style=for-the-badge)
 
-**Advanced ADB, Fastboot & Samsung Device Management Tool**
+**Advanced ADB, Fastboot & Samsung Device Management Tool with Universal Debloater**
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/0xb0rn3/droidB/releases)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/0xb0rn3/droidB/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/0xb0rn3/droidB)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Shell](https://img.shields.io/badge/shell-bash-yellow.svg)](https://github.com/0xb0rn3/droidB)
 
 *A security-focused, beginner-friendly automation tool for Android and Samsung devices*
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Installation](#-installation) • [Documentation](#-documentation) • [Support](#-support)
+[Features](#-features) • [Quick Start](#-quick-start) • [Installation](#-installation) • [Debloater](#-universal-debloater) • [Documentation](#-documentation) • [Support](#-support)
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## ⚠️ Critical Safety Notice
 
-> **WARNING:** This tool can permanently modify device firmware. **Always backup your data** before use and ensure you have official recovery images available.
+> **WARNING:** This tool can permanently modify device firmware and remove system applications. **Always backup your data** before use and ensure you have official recovery images available.
 >
 > **Improper use can brick your device.** Read documentation carefully before proceeding.
 
@@ -31,6 +31,7 @@
 
 **droidB** is a powerful command-line tool that simplifies Android device management, debugging, and firmware operations. Whether you're a developer, security researcher, or power user, droidB provides an intuitive interface for:
 
+- **Universal Debloater**: Remove 100+ bloatware packages with one click
 - **Device Management**: Full ADB control with visual file explorer
 - **Firmware Operations**: Flash custom ROMs, stock firmware, GSI, and recoveries
 - **Samsung Specialization**: Native Odin4 and Heimdall support for Samsung devices
@@ -40,6 +41,7 @@
 ### Why Choose droidB?
 
 ✅ **Beginner-Friendly** - Menu-driven interface, no command memorization  
+✅ **Universal Debloater** - Remove bloatware with embedded lists (100+ packages)  
 ✅ **Drag & Drop** - Simply drag files into terminal for instant operations  
 ✅ **Safety First** - Multiple confirmations for dangerous operations  
 ✅ **Cross-Platform** - Works on Linux, macOS, and Windows (WSL)  
@@ -50,6 +52,38 @@
 ---
 
 ## ✨ Features
+
+### 🗑️ Universal Debloater (NEW!)
+
+<table>
+<tr>
+<td width="50%">
+
+**One-Click Bloatware Removal**
+- 100+ embedded bloatware packages
+- Amazon, Facebook, Google apps
+- Samsung bloat (Bixby, Knox, etc.)
+- Microsoft Office suite
+- Carrier bloatware
+- Social media & streaming apps
+- Game services & fonts
+
+</td>
+<td width="50%">
+
+**Smart Debloat Features**
+- Preview packages before removal
+- Category-based selective removal
+- Scan device for bloatware
+- One-click revert/restore
+- Backup creation
+- Custom list support
+- Non-destructive (keeps data)
+- Safe uninstall (user-level only)
+
+</td>
+</tr>
+</table>
 
 ### 🔧 Core Capabilities
 
@@ -72,9 +106,9 @@
 **Fastboot Operations**
 - Partition flashing & management
 - Bootloader unlock/lock
-- **GSI (Generic System Image) flashing**
-- **Project Treble detection**
-- **A/B slot management**
+- GSI (Generic System Image) flashing
+- Project Treble detection
+- A/B slot management
 - Custom recovery installation
 - Wipe & format operations
 - OEM-specific commands
@@ -116,20 +150,17 @@
 ### For Complete Beginners
 
 **Step 1: Enable Developer Options on Your Device**
-
 1. Go to **Settings** → **About Phone**
 2. Tap **Build Number** 7 times rapidly
 3. You'll see a message: "You are now a developer!"
 
 **Step 2: Enable USB Debugging**
-
 1. Go to **Settings** → **Developer Options**
 2. Enable **USB Debugging**
 3. Connect your device via USB cable
 4. Authorize your computer on the device screen (important!)
 
 **Step 3: Install and Run droidB**
-
 ```bash
 # Download droidB
 git clone https://github.com/0xb0rn3/droidB.git
@@ -201,6 +232,291 @@ brew install android-platform-tools curl wget xz
 
 ---
 
+## 🗑️ Universal Debloater
+
+### What is Bloatware?
+
+Bloatware refers to pre-installed apps that:
+- Cannot be uninstalled normally
+- Consume system resources
+- Run in the background
+- Drain battery
+- Take up storage space
+- May collect data
+
+### Using the Debloater
+
+#### Quick Start: One-Click Debloat
+
+```bash
+./droidB
+
+# Select Option 2: Universal Debloater
+# Then Option 1: Debloat with embedded list
+```
+
+This removes all 100+ bloatware packages in one go!
+
+#### Menu Structure
+
+When you open the Universal Debloater, you'll see:
+
+```
+🗑️  UNIVERSAL DEBLOATER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Device: Samsung Galaxy S21 (device)
+Serial: 1234567890ABCDEF
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Embedded bloatware list: 100 packages
+
+1. Debloat with embedded list (recommended)
+2. Debloat with custom list file
+3. Preview embedded debloat list
+4. Selective debloat (choose apps)
+5. Scan device for bloatware
+6. Revert/Restore debloated apps
+7. Create backup before debloat
+8. Export embedded list to file
+9. Back to main menu
+```
+
+### Debloat Options Explained
+
+#### 1. Debloat with Embedded List (Recommended)
+
+**What it does:** Removes all 100+ bloatware packages automatically
+
+**Perfect for:** Users who want to clean their device quickly
+
+**Process:**
+```bash
+# Select option 1
+# Confirm the action
+# Wait for completion (1-5 minutes)
+# Optionally reboot device
+```
+
+**Example Output:**
+```
+Starting debloat process...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Processing: com.facebook.katana... [✓ REMOVED]
+Processing: com.samsung.android.bixby.agent... [✓ REMOVED]
+Processing: com.google.android.apps.docs... [✓ REMOVED]
+Processing: com.amazon.kindle... [- NOT FOUND]
+...
+
+Debloat Summary:
+  ✓ Successfully removed: 67 packages
+  ✗ Failed to remove: 3 packages
+  - Not found on device: 30 packages
+```
+
+#### 2. Debloat with Custom List
+
+**What it does:** Use your own list of packages to remove
+
+**Perfect for:** Advanced users with specific needs
+
+**Usage:**
+```bash
+# Create a text file with package names (one per line)
+# Example: my_bloat.txt
+com.example.app1
+com.example.app2
+# Lines starting with # are comments
+
+# Select option 2
+# Drag and drop your file or type the path
+```
+
+#### 3. Preview Embedded List
+
+**What it does:** View all packages that will be removed
+
+**Perfect for:** Checking before you debloat
+
+**Categories included:**
+- Amazon bloatware (Kindle, Shopping, etc.)
+- Facebook apps (Facebook, Messenger, services)
+- Google apps (Docs, Maps, Photos, YouTube, etc.)
+- Microsoft Office (Excel, Word, PowerPoint, Outlook)
+- Samsung bloat (Bixby, Game Launcher, Tips, etc.)
+- Social media (LinkedIn, Spotify, Netflix, etc.)
+- System bloat (ANT+, Print services, etc.)
+
+#### 4. Selective Debloat
+
+**What it does:** Remove specific categories of bloatware
+
+**Perfect for:** Users who want fine control
+
+**Categories available:**
+```
+1. Amazon bloatware (5 packages)
+2. Facebook apps (4 packages)
+3. Google apps (20+ packages)
+4. Microsoft Office (7 packages)
+5. Samsung bloatware (30+ packages)
+6. Bixby services (4 packages)
+7. Custom package names (manual entry)
+```
+
+**Example:**
+```bash
+# Select option 4
+# Choose "2" for Facebook apps
+# Confirms removal of:
+#   - com.facebook.appmanager
+#   - com.facebook.katana
+#   - com.facebook.services
+#   - com.facebook.system
+```
+
+#### 5. Scan Device for Bloatware
+
+**What it does:** Checks which bloatware is on your device
+
+**Perfect for:** Seeing what you can remove
+
+**Example Output:**
+```
+Scanning device...
+[FOUND] com.amazon.kindle
+[FOUND] com.facebook.katana
+[FOUND] com.samsung.android.bixby.agent
+[FOUND] com.google.android.apps.docs
+...
+
+Found 67 bloatware packages on device
+```
+
+#### 6. Revert/Restore
+
+**What it does:** Restore previously removed apps
+
+**Perfect for:** If you removed something you needed
+
+**Options:**
+- Restore all from embedded list
+- Restore specific packages
+
+**Important Notes:**
+- Only system apps can be restored
+- Third-party apps need reinstallation
+- Some apps may require factory reset to restore
+
+#### 7. Create Backup
+
+**What it does:** Saves list of all installed packages
+
+**Perfect for:** Safety before debloating
+
+**Creates:** Text file with all package names and device info
+
+#### 8. Export List
+
+**What it does:** Save embedded list to a file
+
+**Perfect for:** Creating your own custom list
+
+**Usage:**
+```bash
+# Select option 8
+# File saved as: droidb_debloat_list_20250117.txt
+# Edit this file to customize your debloat list
+```
+
+### Safety & Considerations
+
+#### ✅ Safe to Remove
+
+The embedded list contains only bloatware that is generally safe to remove:
+- Pre-installed apps from manufacturers
+- Carrier apps
+- Promotional apps
+- Redundant system services
+- Social media apps
+
+#### ⚠️ What's NOT Removed
+
+droidB will NOT remove critical system components:
+- Core Android services
+- System UI
+- Phone/Dialer apps
+- Settings
+- System frameworks
+- Device-specific drivers
+
+#### 🔒 How It Works
+
+```bash
+# Command used: pm uninstall -k --user 0 <package>
+# This means:
+# - Uninstalls for current user only (not system-wide)
+# - Keeps app data (-k flag)
+# - Non-destructive removal
+# - Can be restored later
+```
+
+#### 💡 Best Practices
+
+1. **Always backup first** (use option 7)
+2. **Preview the list** (use option 3)
+3. **Scan your device** (use option 5) to see what you have
+4. **Start selective** (use option 4) if unsure
+5. **Reboot after debloat** for best results
+6. **Keep notes** of what you removed
+
+#### 🚨 If Something Goes Wrong
+
+```bash
+# Option 1: Restore apps
+./droidB
+# Select Option 2 → Option 6 → Restore
+
+# Option 2: Factory reset
+# Settings → System → Reset → Factory reset
+
+# Option 3: Re-flash firmware
+# (Only if device won't boot)
+```
+
+### Bloatware Categories Explained
+
+#### Amazon Bloatware
+- **com.amazon.kindle** - Kindle e-reader app
+- **com.amazon.mp3** - Amazon Music
+- **com.amazon.mShop.android** - Amazon Shopping
+
+#### Facebook Bloatware
+- **com.facebook.katana** - Facebook app
+- **com.facebook.services** - Facebook background services
+- **com.facebook.appmanager** - Facebook app manager
+- **com.facebook.system** - Facebook system integration
+
+#### Google Bloatware
+- **Gmail, Maps, Photos, YouTube** - Google apps
+- **Google Play Books, Music, Movies**
+- **Google Assistant services**
+- **Google Feedback & Analytics**
+
+#### Samsung Bloatware
+- **Bixby** - Samsung voice assistant (4 services)
+- **Samsung Browser** - Alternative to Chrome
+- **Samsung Email** - Email client
+- **Samsung Calendar** - Calendar app
+- **Game Launcher** - Gaming features
+- **Samsung Pass** - Password manager
+- **Samsung Pay** - Mobile payment
+
+#### Microsoft Bloatware
+- **Office apps** - Excel, Word, PowerPoint, Outlook
+- **OneDrive** - Cloud storage
+- **App Manager** - Microsoft services
+
+---
+
 ## 📖 Beginner's Guide
 
 ### Understanding the Interface
@@ -218,59 +534,49 @@ When you launch droidB, you'll see a menu like this:
 ║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
-
-    Advanced Android & Samsung Device Manager v0.1.1
-    Security-Focused | Drag & Drop | System Integration
+    Advanced Android Device Manager v0.2.0
+    Universal Debloater | Samsung Tools | Security-Focused
     Developer: 0xbv1 | 0xb0rn3
     GitHub: https://github.com/0xb0rn3/droidB
-
 ════════════════════════════════════════════════════════════
-
 Device: Samsung Galaxy S21 (device)
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Main Menu:
   1. Device Information
-  2. File Explorer (Visual)
-  3. File Operations
-  4. App Management
+  2. Universal Debloater 🗑️
+  3. App Management
+  4. File Operations
   5. System Operations
-  6. Fastboot Mode
+  6. Fastboot Operations
   7. Samsung Operations
-  8. Device Backup/Restore
-  9. Shell Access
-  0. Settings & Tools
+  8. Install System-Wide
   q. Exit
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ### Common Tasks for Beginners
 
+#### 🗑️ Remove Bloatware (NEW!)
+1. Select **Option 2** (Universal Debloater)
+2. Choose **Option 5** to scan your device first
+3. Review what bloatware you have
+4. Select **Option 1** to remove all bloatware
+5. Reboot device when prompted
+
 #### 📱 View Device Information
 1. Select **Option 1** from main menu
 2. See model, Android version, battery level, IP address
 
-#### 📂 Browse Device Files
-1. Select **Option 2** (File Explorer)
-2. Navigate with numbers
-3. **[p]** to push files (drag & drop supported)
-4. **[..]** to go back, **[~]** for home directory
-
 #### 📲 Install an APK
-1. Select **Option 4** (App Management)
+1. Select **Option 3** (App Management)
 2. Choose **Option 1** (Install APK)
 3. Drag the APK file into terminal OR type the path
 4. Press Enter - done!
 
 #### 📸 Take a Screenshot
-1. Select **Option 3** (File Operations)
-2. Choose **Option 5** (Screenshot)
+1. Select **Option 4** (File Operations)
+2. Choose **Option 3** (Screenshot)
 3. File automatically saved to current directory
-
-#### 💾 Backup Your Device
-1. Select **Option 8** (Backup/Restore)
-2. Choose **Option 1** (Full backup)
-3. Wait for completion (may take 10-30 minutes)
 
 ---
 
@@ -293,16 +599,16 @@ adb reboot download
 
 #### Flashing Samsung Firmware
 
-1. Launch droidB: `./droidB --samsung`
-2. Select **Option 1** (Flash Complete Firmware)
-3. Drag and drop firmware files when prompted:
+1. Launch droidB: `./droidB`
+2. Select **Option 7** (Samsung Operations)
+3. Select **Option 1** (Flash Complete Firmware)
+4. Drag and drop firmware files when prompted:
    - **BL** (Bootloader) - Optional
    - **AP** (System/PDA) - Required
    - **CP** (Modem) - Optional
    - **CSC** (Region) - Optional
    - **HOME_CSC** - Use this to keep data
-
-4. Confirm warnings and wait for completion
+5. Confirm warnings and wait for completion
 
 **Important Notes:**
 - Wrong firmware = bricked device
@@ -316,8 +622,9 @@ adb reboot download
 #### Unlocking Bootloader
 
 ```bash
-./droidB --fastboot
-# Select Option 3 → Option 1 (Unlock)
+./droidB
+# Select Option 6 (Fastboot Operations)
+# Select Option 3 (Unlock bootloader)
 ```
 
 ⚠️ **Warning:** Unlocking wipes ALL data!
@@ -325,99 +632,11 @@ adb reboot download
 #### Flashing Custom Recovery
 
 ```bash
-./droidB --fastboot
+./droidB
+# Select Option 6 (Fastboot Operations)
 # Select Option 2 (Boot image)
 # Drag recovery.img file
 ```
-
-#### Installing GSI (Generic System Image)
-
-**NEW in v0.1.1:** Comprehensive GSI flashing with automatic checks!
-
-**Prerequisites:**
-- Unlocked bootloader
-- Project Treble support (automatically verified)
-- GSI image matching device architecture (ARM64/ARM32)
-- Stock vbmeta.img file
-
-**Step-by-Step Process:**
-
-1. **Prepare Files:**
-   - Download GSI image from [phhusson's GSI repository](https://github.com/phhusson/treble_experimentations/releases)
-   - Extract vbmeta.img from stock ROM OR droidB can create an empty one
-   - Optional: vendor.img if needed
-
-2. **Boot to Fastboot:**
-   ```bash
-   adb reboot bootloader
-   # Or manually: Power off, hold Vol Down + Power
-   ```
-
-3. **Launch GSI Flash:**
-   ```bash
-   ./droidB --fastboot
-   # Select Option 7 (Flash GSI)
-   ```
-
-4. **Follow the Wizard:**
-   - droidB automatically checks:
-     - ✓ Fastboot mode detection
-     - ✓ Bootloader unlock status
-     - ✓ Device model identification
-   
-5. **Provide Files:**
-   - Drag & drop GSI image (supports .img and .img.xz)
-   - Drag & drop vbmeta.img (or create empty)
-   - Optional: vendor image
-
-6. **Configure Options:**
-   - Wipe userdata (Recommended for first install)
-   - Disable AVB verification (Required for GSI)
-
-7. **Confirm and Flash:**
-   - Review flash plan
-   - Confirm critical warnings
-   - Wait for completion (5-15 minutes)
-
-**Post-Flash:**
-- First boot takes 10-15 minutes
-- Device may reboot multiple times (normal)
-- Some hardware features may not work initially
-- Check XDA forums for device-specific patches
-
-**Flash Log:**
-All operations are logged to `/tmp/gsi_flash.log` for troubleshooting.
-
-**Supported GSI Types:**
-- ARM64 A/B (most modern devices)
-- ARM64 A-only (older devices)
-- ARM32 variants (legacy devices)
-
----
-
-## 🛡️ Safety Features
-
-### Built-in Protection
-
-- **Triple Confirmation** for bootloader operations
-- **Knox Bit Warnings** for Samsung devices
-- **Region Mismatch Detection** prevents wrong firmware
-- **Automatic Backup Reminders** before major operations
-- **Model Verification** before flashing
-- **USB Connection Stability** monitoring
-- **Project Treble Verification** for GSI flashing
-- **Bootloader Lock Detection** prevents dangerous operations
-- **Flash Progress Logging** for troubleshooting
-
-### Understanding Warnings
-
-| Warning | Meaning | Action |
-|---------|---------|--------|
-| 🔴 WIPES DATA | Operation deletes everything | Backup first |
-| 🟡 Knox 0x1 | Samsung warranty void (permanent) | Understand implications |
-| 🟠 BRICK RISK | Wrong firmware can kill device | Verify model number |
-| 🔵 ROOT REQUIRED | Needs elevated permissions | Accept sudo prompt |
-| 🟣 TREBLE REQUIRED | GSI needs Treble support | Verify device compatibility |
 
 ---
 
@@ -431,14 +650,6 @@ droidB --help             # Show help information
 droidB --version          # Show version
 droidB --install          # Install system-wide
 droidB --device SERIAL    # Connect to specific device
-```
-
-### Direct Access Commands
-
-```bash
-droidB --fastboot         # Jump to fastboot menu
-droidB --samsung          # Jump to Samsung menu
-droidB --shell            # Open ADB shell directly
 ```
 
 ### Device Preparation
@@ -473,6 +684,15 @@ adb reboot download       # Download mode (Samsung)
    adb start-server
    ```
 
+### Debloater Issues
+
+| Problem | Solution |
+|---------|----------|
+| "Failed to remove" packages | Package may be protected, try selective removal |
+| Can't restore apps | Some apps require factory reset |
+| Device sluggish after debloat | Reboot device |
+| Removed wrong app | Use Option 6 to restore |
+
 ### Samsung Download Mode Issues
 
 **Problem:** Device not detected in download mode
@@ -487,132 +707,32 @@ adb reboot download       # Download mode (Samsung)
 3. Check cable quality (original Samsung cable recommended)
 4. Verify download mode entry (screen should show warning)
 
-### Fastboot Not Working
-
-**Problem:** Device not showing in `fastboot devices`
-
-**Solutions:**
-1. Ensure device is in bootloader/fastboot mode
-2. Some devices need `fastboot oem unlock` first
-3. Windows users: Install fastboot drivers
-4. Try: `sudo fastboot devices` (Linux/Mac)
-
-### GSI Flash Issues
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| Treble Not Supported | Device lacks Treble | Cannot install GSI |
-| Bootloader Locked | Security protection active | Unlock bootloader first |
-| AVB Disable Failed | Verification protection | Try with empty vbmeta |
-| System Flash Failed | Wrong architecture | Use ARM64 for most devices |
-| First Boot Loop | Normal behavior | Wait 15+ minutes |
-
-### Flash Failed Errors
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| FAIL! (Auth) | Wrong firmware region | Get correct region firmware |
-| FAIL! (Remote) | Incompatible version | Check security patch level |
-| Connection Lost | USB issue | Use different port/cable |
-| Knox 0x1 | Already unlocked | Normal, continue |
-| PIT Read Error | Corrupted partition | May need professional unbrick |
-
----
-
-## 🎓 Learning Resources
-
-### Understanding ADB
-
-ADB (Android Debug Bridge) is a command-line tool for communicating with Android devices. droidB automates ADB commands with an easy interface.
-
-**Key Concepts:**
-- **Push**: Send files from computer to device
-- **Pull**: Get files from device to computer
-- **Shell**: Access device command line
-- **Install**: Install APK applications
-- **Logcat**: View system logs
-
-### Understanding Fastboot
-
-Fastboot is a protocol for modifying device firmware. Used for:
-- Flashing system images
-- Unlocking bootloader
-- Installing custom recoveries
-- Advanced device repair
-
-### Understanding GSI (Generic System Images)
-
-GSI is a pure AOSP system image that works across multiple devices with Project Treble support.
-
-**Key Concepts:**
-- **Project Treble**: Framework separating vendor implementation from Android framework
-- **VNDK**: Vendor Native Development Kit version
-- **A/B Partitions**: Seamless update mechanism
-- **AVB**: Android Verified Boot (must be disabled for GSI)
-
-**GSI Resources:**
-- [phhusson's GSI](https://github.com/phhusson/treble_experimentations) - Most popular GSI builds
-- [Project Treble](https://source.android.com/docs/core/architecture/treble) - Official documentation
-- [XDA GSI Forum](https://forum.xda-developers.com/c/project-treble.7260/) - Community support
-
-### Samsung Download Mode
-
-Samsung's proprietary firmware flashing mode. Features:
-- Complete firmware installation
-- Individual partition updates
-- PIT (Partition Information Table) operations
-- Emergency recovery
-
 ---
 
 ## 📱 Device Compatibility
 
-### GSI Compatibility
+### Universal Debloater Compatibility
 
-**Requirements for GSI:**
-- ✅ Android 8.0+ with Project Treble
-- ✅ Unlocked bootloader
-- ✅ ARM64 or ARM32 architecture
+**Works on ALL Android devices with:**
+- ✅ USB Debugging enabled
+- ✅ ADB access
+- ✅ Android 4.4+
 
-**Check Treble Support:**
-```bash
-adb shell getprop ro.treble.enabled
-# Should return: true
-```
-
-**Highly Compatible Devices:**
-- Google Pixel series (Pixel 2+)
-- OnePlus 5T and newer
-- Xiaomi Mi A series
-- Essential Phone
-- Lenovo P11 Gen 2
-- Most devices from 2018+
+**Tested on:**
+- Samsung Galaxy series
+- Google Pixel devices
+- OnePlus devices
+- Xiaomi devices
+- Motorola devices
+- Most Android devices
 
 ### Samsung Devices
 
 #### Fully Supported (Odin4 + Heimdall)
-- Galaxy S7/S7 Edge through S10 series
-- Galaxy Note 8 through Note 10
-- Galaxy A series (A10-A50)
+- Galaxy S7/S7 Edge through S24 series
+- Galaxy Note 8 through Note 20
+- Galaxy A series (A10-A73)
 - Galaxy Tab A series
-
-#### Odin4 Preferred
-- Galaxy S20/S21/S22/S23/S24 series
-- Galaxy Note 20 series
-- Galaxy A series (A51+)
-- Galaxy Tab S series
-
-#### Important Notes
-- **Knox 0x0**: Locked bootloader, warranty intact
-- **Knox 0x1**: Custom software detected, warranty void (permanent)
-- Exynos vs Snapdragon: Both supported with correct firmware
-
-### Standard Android Devices
-
-Works with all Android devices supporting:
-- ADB over USB
-- Fastboot protocol (for bootloader operations)
-- Standard Android partition layout
 
 ---
 
@@ -621,42 +741,26 @@ Works with all Android devices supporting:
 We welcome contributions! Here's how you can help:
 
 ### Reporting Issues
+
 1. Check existing issues first
 2. Provide device model and Android version
-3. Include error messages and logs (`/tmp/gsi_flash.log` for GSI issues)
+3. Include error messages and logs
 4. Describe steps to reproduce
 
-### Adding Device Support
-1. Fork the repository
-2. Test on your device
-3. Update compatibility matrix
-4. Submit pull request with results
+### Adding Bloatware Packages
 
-### Code Contributions
-1. Follow bash best practices
-2. Add comments for complex operations
-3. Test on multiple platforms
-4. Update documentation
+Found bloatware not in our list?
+
+1. Fork the repository
+2. Add package name to embedded list
+3. Test on your device
+4. Submit pull request
 
 ---
 
 ## 📄 License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) file for details.
-
-### You are free to:
-✅ Use commercially  
-✅ Modify the code  
-✅ Distribute  
-✅ Use privately  
-
-### You must:
-📋 Include copyright notice  
-📋 Include license text  
-
-### Limitations:
-❌ No liability from author  
-❌ No warranty provided  
 
 ---
 
@@ -665,95 +769,45 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 ### Get Help
 
 - **General Issues**: [GitHub Issues](https://github.com/0xb0rn3/droidB/issues)
+- **Debloater Support**: [Debloater Issues](https://github.com/0xb0rn3/droidB/issues?q=label%3Adebloater)
 - **Samsung Support**: [Samsung Issues](https://github.com/0xb0rn3/droidB/issues?q=label%3Asamsung)
-- **GSI Support**: [GSI Issues](https://github.com/0xb0rn3/droidB/issues?q=label%3Agsi)
 - **Discussions**: [GitHub Discussions](https://github.com/0xb0rn3/droidB/discussions)
 
 ### Useful Resources
 
+**Bloatware Info:**
+- [Android Bloatware List](https://github.com/0xb0rn3/android-debloat-list) - Comprehensive package database
+- [XDA Debloat Guide](https://forum.xda-developers.com/) - Community debloat threads
+
 **Firmware Sources:**
 - [SamMobile](https://www.sammobile.com/firmware/) - Samsung firmware database
-- [Frija Tool](https://forum.xda-developers.com/t/tool-frija-samsung-firmware-downloader-checker.3910594/) - Firmware downloader
-
-**GSI Sources:**
-- [phhusson's GSI](https://github.com/phhusson/treble_experimentations/releases) - Official GSI builds
-- [Andy Yan's GSI](https://sourceforge.net/projects/andyyan-gsi/) - Alternative builds
-- [LineageOS GSI](https://sourceforge.net/projects/andyyan-gsi/files/lineage-19.x/) - LineageOS-based GSI
-
-**Community:**
 - [XDA Developers](https://forum.xda-developers.com/) - Android development forum
-- [Full Wiki](https://github.com/0xb0rn3/droidB/wiki) - Complete documentation
-
----
-
-## ⚖️ Legal Disclaimer
-
-### Intended Use
-This tool is provided for:
-- ✅ Educational purposes
-- ✅ Software development
-- ✅ Authorized device testing
-- ✅ Personal device modification
-- ✅ Security research
-
-### User Responsibility
-Users are responsible for:
-- ⚠️ Compliance with local laws
-- ⚠️ Device warranty status
-- ⚠️ Data backup and loss
-- ⚠️ Any device damage
-- ⚠️ Proper authorization for device access
-
-### Warranty Notice
-- Samsung Knox 0x1 **permanently voids warranty**
-- Bootloader unlocking voids warranty on most devices
-- Flashing custom firmware may void warranty
-- Check manufacturer policies before proceeding
-
----
-
-## 🎯 Quick Tips for Success
-
-### ✅ Best Practices
-
-1. **Always Backup** - Before any major operation
-2. **Verify Model Numbers** - Double-check firmware matches device
-3. **Charge Device** - Keep above 50% battery
-4. **Use Good Cables** - Original manufacturer cables preferred
-5. **Be Patient** - Some operations take 20+ minutes
-6. **Read Warnings** - Every warning is there for a reason
-7. **Test with Simple Tasks First** - Get comfortable before advanced operations
-8. **Check Treble Before GSI** - Verify compatibility first
-9. **Save Flash Logs** - Keep `/tmp/gsi_flash.log` for troubleshooting
-
-### ❌ Common Mistakes to Avoid
-
-1. ❌ Interrupting firmware flash
-2. ❌ Wrong firmware region
-3. ❌ Insufficient battery charge
-4. ❌ Poor quality USB cables
-5. ❌ Not backing up data
-6. ❌ Ignoring error messages
-7. ❌ Rushing through confirmations
-8. ❌ Flashing GSI on non-Treble devices
-9. ❌ Using wrong architecture GSI
 
 ---
 
 ## 📊 Version History
 
-### v0.1.1 (Current - Latest | Stable)
+### v0.2.0 (Current - Latest | Stable)
+- 🗑️ **NEW: Universal Debloater**
+  - 100+ embedded bloatware packages
+  - One-click removal
+  - Category-based selective removal
+  - Scan & preview features
+  - Revert/restore functionality
+  - Custom list support
+  - Safe, non-destructive removal
+- 🔧 Enhanced Samsung operations
+- 📱 Improved device detection
+- 🐛 Bug fixes and stability improvements
+- 📚 Comprehensive documentation
+
+### v0.1.1
 - ✨ Complete GSI flashing system
 - 🔍 Automatic Project Treble detection
-- 🛡️ Pre-flight safety checks (bootloader, fastboot mode)
+- 🛡️ Pre-flight safety checks
 - 📦 Compressed image support (.img.xz)
 - 🎨 Step-by-step progress indicators
 - 📝 Comprehensive flash logging
-- 🔧 Empty vbmeta creation option
-- 💾 Optional vendor image flashing
-- ⚡ AVB verification disable
-- 🐛 Error handling and recovery
-- 📚 Enhanced documentation
 
 ### v0.1.0
 - 🎉 Initial public release
@@ -762,7 +816,26 @@ Users are responsible for:
 - 📱 Samsung download mode auto-detection
 - 🔐 Security-focused design
 - 📂 Visual file explorer
-- 🖱️ Drag & drop support
+
+---
+
+## 🎯 Quick Tips for Success
+
+### ✅ Best Practices
+
+1. **Backup First** - Create package backup before debloating
+2. **Preview List** - Review what will be removed
+3. **Start Selective** - Try category removal first if unsure
+4. **Reboot After** - Always reboot after debloating
+5. **Take Notes** - Remember what you removed
+6. **Test Apps** - Ensure everything works after debloat
+
+### ❌ Common Mistakes to Avoid
+
+1. ❌ Not backing up package list
+2. ❌ Removing apps without knowing what they do
+3. ❌ Not rebooting after debloat
+4. ❌ Panicking if something doesn't work (just restore!)
 
 ---
 
@@ -771,9 +844,8 @@ Users are responsible for:
 - **Samsung Open Source** - Download mode protocols
 - **Odin4Linux Team** - Modern Odin implementation
 - **Heimdall Project** - Cross-platform Samsung support
-- **phhusson** - GSI development and Project Treble work
 - **XDA Developers** - Android development community
-- **SamMobile** - Firmware database and tools
+- **Android Debloat Community** - Bloatware package lists
 - **AOSP** - Android Debug Bridge and Fastboot tools
 
 ---
@@ -788,7 +860,9 @@ Users are responsible for:
 
 <div align="center">
 
-**Made with ❤️ by the Android security community**
+**Made with ❤️ for the Android community**
+
+**Star ⭐ this repo if droidB helped clean your device!**
 
 [⬆ Back to Top](#droidb)
 
