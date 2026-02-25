@@ -591,19 +591,6 @@ IGNORANCE OF THE LAW IS NOT A DEFENCE.
 CLAIMING YOU DID NOT READ THIS DISCLAIMER IS NOT A DEFENCE.
 ```
 
----
-
-### Reporting Misuse
-
-If you discover droidB is being used against you or against a device you own without your consent, the following resources may help:
-
-- **National Domestic Violence Hotline (USA):** 1-800-799-7233
-- **Coalition Against Stalkerware:** https://stopstalkerware.org
-- **Cyber Civil Rights Initiative:** https://cybercivilrights.org
-- **Your local law enforcement** — this constitutes criminal computer access in most jurisdictions
-
----
-
 <br/>
 
 ## 🗑️ Universal Debloater
@@ -634,10 +621,6 @@ All removals use `pm disable-user --user 0` by default (non-destructive, reversi
 ---
 
 <br/>
-
-## 📱 Screenshots
-
-<div align="center">
 
 ### **See droidB in Action**
 
