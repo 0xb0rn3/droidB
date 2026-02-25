@@ -2,7 +2,7 @@
 
 set -uo pipefail 
 
-VERSION="0.2.1"
+VERSION="0.3.0"
 SCRIPT_NAME="droidB"
 INSTALL_DIR="/usr/local/bin"
 
