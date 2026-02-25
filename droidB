@@ -2,7 +2,7 @@
 
 set -uo pipefail 
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 SCRIPT_NAME="droidB"
 INSTALL_DIR="/usr/local/bin"
 
@@ -456,11 +456,13 @@ ${BOLD}OPTIONS:${ENDC}
 
 ${BOLD}FEATURES:${ENDC}
     • Universal Debloater (300+ bloatware packages)
+    • APK Install with root/non-root dual mode
     • Samsung firmware flashing (Odin4 + Heimdall)
     • Fastboot operations (flash, unlock, boot)
     • Full ADB automation
     • Drag & drop file operations
-    • Device backup/restore
+    • Device backup/restore (Android 14+ compatible)
+    • Push APK as System App with signing + permissions
     • Security-focused design
 
 ${BOLD}EXAMPLES:${ENDC}
@@ -483,18 +485,23 @@ clear_screen() {
 display_banner() {
     clear_screen
     echo -e "${CYAN}"
-    cat << 'EOF'
-    ╔══════════════════════════════════════════════════════════╗
-    ║                                                          ║
-    ║     ██████╗ ██████╗  ██████╗ ██╗██████╗ ██████╗        ║
-    ║     ██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔══██╗       ║
-    ║     ██║  ██║██████╔╝██║   ██║██║██║  ██║██████╔╝       ║
-    ║     ██║  ██║██╔══██╗██║   ██║██║██║  ██║██╔══██╗       ║
-    ║     ██████╔╝██║  ██║╚██████╔╝██║██████╔╝██████╔╝       ║
-    ║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║
-    ║                                                          ║
-    ╚══════════════════════════════════════════════════════════╝
-EOF
+    # Animated banner draw
+    local banner_lines=(
+        '    ╔══════════════════════════════════════════════════════════╗'
+        '    ║                                                          ║'
+        '    ║     ██████╗ ██████╗  ██████╗ ██╗██████╗ ██████╗        ║'
+        '    ║     ██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔══██╗       ║'
+        '    ║     ██║  ██║██████╔╝██║   ██║██║██║  ██║██████╔╝       ║'
+        '    ║     ██║  ██║██╔══██╗██║   ██║██║██║  ██║██╔══██╗       ║'
+        '    ║     ██████╔╝██║  ██║╚██████╔╝██║██████╔╝██████╔╝       ║'
+        '    ║     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝╚═════╝ ╚═════╝        ║'
+        '    ║                                                          ║'
+        '    ╚══════════════════════════════════════════════════════════╝'
+    )
+    for line in "${banner_lines[@]}"; do
+        echo "$line"
+        sleep 0.02
+    done
     echo -e "${ENDC}"
     echo -e "${BOLD}${BLUE}    Advanced Android Device Manager v${VERSION}${ENDC}"
     echo -e "${GREEN}    Universal Debloater | Samsung Tools | Security-Focused${ENDC}"
@@ -624,6 +631,7 @@ debloat_with_embedded_list() {
     
     echo ""
     echo -e "${BLUE}Starting debloat process...${ENDC}"
+    _loader "Scanning installed packages" 1
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
     
     local success_count=0
@@ -810,6 +818,7 @@ scan_for_bloatware() {
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
     
     echo -e "${BLUE}Scanning device...${ENDC}"
+    _loader "Checking device packages against bloatware database" 2
     echo ""
     
     local found_count=0
@@ -1432,6 +1441,8 @@ display_device_info() {
     if [[ -z "$DEVICE_INFO" ]]; then
         echo -e "${RED}No device information available${ENDC}"
     else
+        _loader "Querying device properties" 1
+
         echo -e "${GREEN}Serial:${ENDC}           $(echo $DEVICE_INFO | grep -oP 'serial=\K[^ ]+' || echo 'N/A')"
         echo -e "${GREEN}Manufacturer:${ENDC}     $(echo $DEVICE_INFO | grep -oP 'manufacturer=\K[^ ]+' || echo 'N/A')"
         echo -e "${GREEN}Model:${ENDC}            $(echo $DEVICE_INFO | grep -oP 'model=\K[^ ]+' || echo 'N/A')"
@@ -1500,20 +1511,65 @@ _remount_ro() {
 # ── APK helpers ───────────────────────────────────────────────
 _pick_system_dir() {
     echo ""
-    echo -e "  ${BOLD}Target directory on device:${ENDC}"
-    echo "    1. /system/app          — standard system app"
-    echo "    2. /system/priv-app     — privileged (signature-level perms, PM-protected)"
-    echo "    3. /system/product/app  — product partition"
-    echo "    4. Custom path"
-    read -rp "  Choice [1-4, default=2]: " dir_choice
+    echo -e "  ${BOLD}${CYAN}┌─ Target Partition ─────────────────────────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Where the APK lives determines its privilege level              ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}1.${ENDC} ${GREEN}/system/app${ENDC}"
+    echo -e "     Standard system app — no elevated permissions."
+    echo -e "     ${YELLOW}Survives factory reset. Cannot be uninstalled via Settings.${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}2.${ENDC} ${GREEN}/system/priv-app${ENDC}  ${MAGENTA}← recommended${ENDC}"
+    echo -e "     Privileged app — PM-protected, signature-level trust."
+    echo -e "     ${YELLOW}Access to signatureOrSystem + privileged permissions.${ENDC}"
+    echo -e "     ${YELLOW}Requires privapp-permissions XML whitelist (auto-generated).${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}3.${ENDC} ${GREEN}/system/product/app${ENDC}"
+    echo -e "     Product partition — modern A/B OTA-safe slot."
+    echo -e "     ${YELLOW}Same as /system/app but on the product partition (Android 10+).${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}4.${ENDC} ${GREEN}/system/product/priv-app${ENDC}"
+    echo -e "     Privileged on product partition — A/B safe + signature-level."
+    echo -e "     ${YELLOW}Best for custom ROMs with separate product partition (A/B devices).${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}5.${ENDC} ${GREEN}/vendor/app${ENDC}"
+    echo -e "     Vendor HAL layer — for device-specific hardware apps."
+    echo -e "     ${YELLOW}Rarely needed unless your APK interacts with vendor HALs.${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}6.${ENDC} ${CYAN}Custom path${ENDC}"
+    echo -e "     Specify any path you want (e.g. /odm/app, /system_ext/priv-app)."
+    echo ""
+
+    # Auto-detect available partitions
+    if [[ -n "${SERIAL:-}" ]]; then
+        echo -e "  ${CYAN}Detecting device partitions…${ENDC}"
+        local parts=""
+        for p in /system/app /system/priv-app /system/product/app /system/product/priv-app /vendor/app /system_ext/priv-app; do
+            local check; check=$($ADB -s "$SERIAL" shell "[ -d '$p' ] && echo Y" 2>/dev/null | tr -d '\r')
+            [[ "$check" == "Y" ]] && parts="$parts ${GREEN}✓${ENDC}$(basename $(dirname $p))/$(basename $p)" || parts="$parts ${RED}✗${ENDC}$(basename $(dirname $p))/$(basename $p)"
+        done
+        echo -e "  Available: $parts"
+        echo ""
+    fi
+
+    read -rp "  Choice [1-6, default=2]: " dir_choice
     case "${dir_choice:-2}" in
         1) SYS_TARGET="/system/app" ;;
         2) SYS_TARGET="/system/priv-app" ;;
         3) SYS_TARGET="/system/product/app" ;;
-        4) read -rp "  Custom path: " SYS_TARGET ;;
+        4) SYS_TARGET="/system/product/priv-app" ;;
+        5) SYS_TARGET="/vendor/app" ;;
+        6) read -rp "  Custom path (must be absolute): " SYS_TARGET
+           [[ ! "$SYS_TARGET" == /* ]] && SYS_TARGET="/$SYS_TARGET"
+           ;;
         *) SYS_TARGET="/system/priv-app" ;;
     esac
-    echo -e "  ${CYAN}Target: $SYS_TARGET${ENDC}"
+    echo -e "  ${GREEN}✓ Target: ${BOLD}$SYS_TARGET${ENDC}"
+
+    # Warn about priv-app requirements
+    if [[ "$SYS_TARGET" == *"priv-app"* ]]; then
+        echo -e "  ${CYAN}  ↳ privapp-permissions XML will be auto-generated${ENDC}"
+    fi
 }
 
 _get_pkg_name() {
@@ -1534,9 +1590,52 @@ _get_pkg_name() {
 
 _validate_apk() {
     local apk="$1"
-    if ! unzip -l "$apk" 2>/dev/null | grep -q "META-INF/"; then
-        echo -e "  ${RED}✗ Not a valid signed APK (no META-INF)${ENDC}"; return 1
+    local valid=true
+    local warnings=()
+    local has_manifest=false has_dex=false has_metainf=false has_resources=false
+
+    # Check it's a valid ZIP first
+    if ! unzip -t "$apk" &>/dev/null; then
+        echo -e "  ${RED}✗ Not a valid ZIP/APK archive${ENDC}"; return 1
     fi
+
+    local contents
+    contents=$(unzip -l "$apk" 2>/dev/null)
+
+    # Check for AndroidManifest.xml (REQUIRED - all APKs must have this)
+    echo "$contents" | grep -q "AndroidManifest.xml" && has_manifest=true
+    # Check for classes.dex (REQUIRED - contains actual app code)
+    echo "$contents" | grep -q "classes\.dex" && has_dex=true
+    # Check for META-INF (signing - optional for sideloading)
+    echo "$contents" | grep -qE "META-INF/" && has_metainf=true
+    # Check for resources.arsc (common but not always present)
+    echo "$contents" | grep -q "resources\.arsc" && has_resources=true
+
+    if ! $has_manifest; then
+        echo -e "  ${RED}✗ No AndroidManifest.xml — not a valid APK${ENDC}"; return 1
+    fi
+    if ! $has_dex; then
+        echo -e "  ${RED}✗ No classes.dex found — APK has no executable code${ENDC}"; return 1
+    fi
+    if ! $has_metainf; then
+        echo -e "  ${YELLOW}⚠ No META-INF/ (unsigned APK) — install may require --bypass-low-target-sdk or root${ENDC}"
+        echo -e "  ${YELLOW}  This is common for GitHub releases and debug builds.${ENDC}"
+        echo -e "  ${CYAN}  Proceeding anyway — ADB will handle signature verification.${ENDC}"
+    fi
+    if ! $has_resources && ! echo "$contents" | grep -qE "res/"; then
+        warnings+=("No resources — may be a minimal/command-line APK")
+    fi
+
+    # Show APK structure summary
+    local file_count; file_count=$(echo "$contents" | grep -c "^[[:space:]]*[0-9]" 2>/dev/null || echo "?")
+    local apk_size; apk_size=$(du -sh "$apk" 2>/dev/null | cut -f1)
+    echo -e "  ${GREEN}✓ Valid APK${ENDC} (${MAGENTA}${apk_size}${ENDC}, ${file_count} files)"
+    echo -e "    Manifest: ${GREEN}✓${ENDC}  DEX: ${GREEN}✓${ENDC}  Signed: $($has_metainf && echo "${GREEN}✓${ENDC}" || echo "${YELLOW}✗${ENDC}")  Resources: $($has_resources && echo "${GREEN}✓${ENDC}" || echo "${YELLOW}~${ENDC}")"
+
+    for w in "${warnings[@]}"; do
+        echo -e "  ${YELLOW}⚠ $w${ENDC}"
+    done
+
     return 0
 }
 
@@ -1595,18 +1694,39 @@ _permission_profile_menu() {
     local selected_groups=()
 
     echo ""
-    echo -e "  ${BOLD}${CYAN}┌─ Permission Configuration ─────────────────────┐${ENDC}"
-    echo -e "  ${BOLD}${CYAN}│${ENDC}  Grant permissions without user prompts          ${BOLD}${CYAN}│${ENDC}"
-    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo -e "  ${BOLD}${CYAN}┌─ Permission Configuration ─────────────────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Auto-grant permissions without user prompts at install time     ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  For priv-app: XML whitelist written so PM never blocks perms    ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────────────────────┘${ENDC}"
     echo ""
-    echo "  Select permission strategy:"
-    echo "    1. 📵  None — keep app's own declared permissions only"
-    echo "    2. 📱  Social Media preset (location, contacts, camera, mic, storage, notifications)"
-    echo "    3. 🛠  Full Dev/Root preset (all dangerous permissions)"
-    echo "    4. 🎥  Media preset (camera, mic, storage, notifications)"
-    echo "    5. 💣  GRANT ALL (every permission group — nuclear option)"
-    echo "    6. 🔧  Custom — pick groups manually"
-    echo "    7. 📋  Auto-detect from APK manifest"
+    echo -e "  ${BOLD}Select permission strategy:${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}1.${ENDC} 📵  ${YELLOW}None${ENDC} — only permissions the APK already declared"
+    echo -e "     No extra grants. App gets whatever it asks for at runtime."
+    echo ""
+    echo -e "  ${BOLD}2.${ENDC} 📱  ${YELLOW}Social Media preset${ENDC}"
+    echo -e "     ${CYAN}Location, Contacts, Camera, Microphone, Storage, Notifications${ENDC}"
+    echo -e "     Covers typical social/messaging app needs."
+    echo ""
+    echo -e "  ${BOLD}3.${ENDC} 🛠  ${YELLOW}Full Dev/Root preset${ENDC}"
+    echo -e "     ${CYAN}All dangerous permission groups (location, contacts, camera, mic,${ENDC}"
+    echo -e "     ${CYAN}storage, phone, SMS, calendar, sensors, BT, notifications, overlay, install)${ENDC}"
+    echo -e "     For dev tools, security apps, and root utilities."
+    echo ""
+    echo -e "  ${BOLD}4.${ENDC} 🎥  ${YELLOW}Media preset${ENDC}"
+    echo -e "     ${CYAN}Camera, Microphone, Storage, Notifications${ENDC}"
+    echo -e "     Media players, screen recorders, streaming apps."
+    echo ""
+    echo -e "  ${BOLD}5.${ENDC} 💣  ${RED}GRANT ALL${ENDC} — every permission group (nuclear option)"
+    echo -e "     Every single dangerous + special permission group including"
+    echo -e "     device admin and accessibility. ${RED}Use with caution.${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}6.${ENDC} 🔧  ${YELLOW}Custom${ENDC} — pick specific groups from a numbered list"
+    echo -e "     Hand-select exactly which permission groups to grant."
+    echo ""
+    echo -e "  ${BOLD}7.${ENDC} 📋  ${GREEN}Auto-detect from APK manifest${ENDC}  ${MAGENTA}← recommended${ENDC}"
+    echo -e "     Reads every ${CYAN}uses-permission${ENDC} from the APK manifest and grants"
+    echo -e "     exactly those — nothing more, nothing less."
     echo ""
     read -rp "  Choice [1-7, default=7]: " perm_choice
 
@@ -1622,18 +1742,41 @@ _permission_profile_menu() {
         6)
             echo ""
             echo -e "  ${BOLD}Available permission groups:${ENDC}"
+            echo -e "  ${YELLOW}$(printf '─%.0s' {1..60})${ENDC}"
             local i=1
             local group_order=(location contacts camera microphone storage phone sms calendar sensors bluetooth notifications system_alert install_packages device_admin accessibility)
+            local group_desc=(
+                "GPS/network location access"
+                "Read/write contacts and accounts"
+                "Camera hardware access"
+                "Microphone / audio recording"
+                "Internal + external storage, media files"
+                "Phone state, call log, voicemail, SIP"
+                "Send/receive/read SMS and MMS"
+                "Read/write calendar events"
+                "Body sensors, activity recognition"
+                "Bluetooth scan, connect, advertise"
+                "Post push notifications"
+                "Draw overlays on other apps"
+                "Install APKs from unknown sources"
+                "Device administrator privileges"
+                "Accessibility service binding"
+            )
             for g in "${group_order[@]}"; do
-                printf "    %2d. %-20s  %s\n" "$i" "$g" "$(echo "${_PERM_GROUPS[$g]}" | awk '{print $1}')"
+                printf "  ${BOLD}%3d.${ENDC} ${CYAN}%-18s${ENDC}  %s\n" "$i" "$g" "${group_desc[$((i-1))]}"
                 i=$((i+1))
             done
+            echo -e "  ${YELLOW}$(printf '─%.0s' {1..60})${ENDC}"
             echo ""
-            read -rp "  Enter numbers separated by spaces (e.g. 1 3 4): " group_nums
+            read -rp "  Enter numbers separated by spaces (e.g. 1 3 4 5): " group_nums
             for n in $group_nums; do
                 local idx=$((n-1))
                 [[ $idx -ge 0 && $idx -lt ${#group_order[@]} ]] && selected_groups+=("${group_order[$idx]}")
             done
+            if [[ ${#selected_groups[@]} -eq 0 ]]; then
+                echo -e "  ${YELLOW}No groups selected — no permissions will be granted.${ENDC}"
+                return 0
+            fi
             ;;
         7)
             echo -e "  ${CYAN}Reading APK manifest permissions…${ENDC}"
@@ -1644,18 +1787,44 @@ _permission_profile_menu() {
                 echo -e "  ${YELLOW}  Falling back to Social Media preset.${ENDC}"
                 IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[social]}"
             else
-                echo -e "  ${GREEN}Found declared permissions:${ENDC}"
+                local perm_count; perm_count=$(echo "$declared_perms" | wc -l)
+                echo -e "  ${GREEN}Found ${BOLD}$perm_count${ENDC}${GREEN} declared permissions:${ENDC}"
+                echo -e "  ${YELLOW}$(printf '─%.0s' {1..50})${ENDC}"
                 echo "$declared_perms" | while IFS= read -r p; do
-                    echo -e "    ${CYAN}+${ENDC} $p"
+                    # Color-code by type
+                    if echo "$p" | grep -qE "INTERNET|NETWORK|WIFI"; then
+                        echo -e "    ${CYAN}🌐${ENDC} $p"
+                    elif echo "$p" | grep -qE "CAMERA|RECORD_AUDIO"; then
+                        echo -e "    ${RED}📸${ENDC} $p"
+                    elif echo "$p" | grep -qE "LOCATION|GPS"; then
+                        echo -e "    ${RED}📍${ENDC} $p"
+                    elif echo "$p" | grep -qE "STORAGE|MEDIA|EXTERNAL"; then
+                        echo -e "    ${YELLOW}💾${ENDC} $p"
+                    elif echo "$p" | grep -qE "CONTACTS|ACCOUNTS|CALL_LOG"; then
+                        echo -e "    ${MAGENTA}👤${ENDC} $p"
+                    else
+                        echo -e "    ${GREEN}+${ENDC}  $p"
+                    fi
                 done
+                echo -e "  ${YELLOW}$(printf '─%.0s' {1..50})${ENDC}"
                 # Convert declared perms directly — no group mapping needed
                 SELECTED_PERMS="$declared_perms"
-                echo -e "  ${GREEN}✓ Will auto-grant all ${MAGENTA}$(echo "$declared_perms" | wc -l)${GREEN} declared permissions${ENDC}"
+                echo -e "  ${GREEN}✓ Will auto-grant all ${BOLD}$perm_count${ENDC}${GREEN} declared permissions${ENDC}"
                 return 0
             fi
             ;;
         *)
-            echo -e "  ${YELLOW}Invalid choice, using Social Media preset.${ENDC}"
+            echo -e "  ${YELLOW}Invalid choice, using Auto-detect.${ENDC}"
+            # Recurse with auto-detect
+            perm_choice=7
+            echo -e "  ${CYAN}Reading APK manifest permissions…${ENDC}"
+            local declared_perms
+            declared_perms=$(_get_apk_declared_perms "$_SIGNING_APK_PATH")
+            if [[ -n "$declared_perms" ]]; then
+                SELECTED_PERMS="$declared_perms"
+                echo -e "  ${GREEN}✓ Will auto-grant all $(echo "$declared_perms" | wc -l) declared permissions${ENDC}"
+                return 0
+            fi
             IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[social]}"
             ;;
     esac
@@ -1670,7 +1839,7 @@ _permission_profile_menu() {
     SELECTED_PERMS=$(echo "$perm_list" | tr ' ' '\n' | sort -u | grep -v '^$')
 
     local cnt; cnt=$(echo "$SELECTED_PERMS" | grep -c "android\." || true)
-    echo -e "  ${GREEN}✓ ${MAGENTA}$cnt${GREEN} permissions selected across groups: ${CYAN}${selected_groups[*]}${ENDC}"
+    echo -e "  ${GREEN}✓ ${BOLD}$cnt${ENDC}${GREEN} permissions selected across groups: ${CYAN}${selected_groups[*]}${ENDC}"
 }
 
 # Grant all SELECTED_PERMS to a package via pm grant (root)
@@ -1706,24 +1875,47 @@ _grant_permissions() {
 }
 
 # Write /system/etc/permissions/<pkg>.xml for priv-app permission whitelist
+# Supports: /system/priv-app, /system/product/priv-app, /vendor/priv-app, /system_ext/priv-app
 _write_privapp_permissions_xml() {
     local pkg="$1"
     [[ -z "$SELECTED_PERMS" ]] && return 0
     [[ "$SYS_TARGET" != *"priv-app"* ]] && return 0   # only needed for priv-app
 
-    local xml_path="/system/etc/permissions/privapp-permissions-${pkg}.xml"
-    echo -e "  ${CYAN}Writing privapp permissions XML → $xml_path${ENDC}"
+    # Determine correct permissions XML directory based on target partition
+    local xml_base=""
+    case "$SYS_TARGET" in
+        /system/product/priv-app*)  xml_base="/system/product/etc/permissions" ;;
+        /vendor/priv-app*)          xml_base="/vendor/etc/permissions" ;;
+        /system_ext/priv-app*)      xml_base="/system_ext/etc/permissions" ;;
+        /system/priv-app*|*)        xml_base="/system/etc/permissions" ;;
+    esac
 
-    # Build XML content
-    local xml_lines='<?xml version="1.0" encoding="utf-8"?>\n<permissions>\n'
+    local xml_filename="privapp-permissions-${pkg}.xml"
+    local xml_path="${xml_base}/${xml_filename}"
+    echo -e "  ${CYAN}Writing privapp permissions whitelist…${ENDC}"
+    echo -e "  ${CYAN}  → $xml_path${ENDC}"
+
+    # Ensure target permissions directory exists
+    _su "mkdir -p '$xml_base'" 2>/dev/null
+
+    # Build XML content — full Android-compatible format
+    local xml_lines='<?xml version="1.0" encoding="utf-8"?>\n'
+    xml_lines+='<!-- Auto-generated by droidB v0.3.1 -->\n'
+    xml_lines+='<!-- Whitelist for privileged permissions used by '"$pkg"' -->\n'
+    xml_lines+='<!-- Without this file, the Package Manager will deny privileged -->\n'
+    xml_lines+='<!-- permissions to this app regardless of API level. -->\n'
+    xml_lines+='<permissions>\n'
     xml_lines+="    <privapp-permissions package=\"${pkg}\">\n"
+
+    local perm_count=0
     while IFS= read -r perm; do
         [[ -z "$perm" ]] && continue
         xml_lines+="        <permission name=\"${perm}\"/>\n"
+        perm_count=$((perm_count + 1))
     done <<< "$SELECTED_PERMS"
     xml_lines+='    </privapp-permissions>\n</permissions>'
 
-    # Write via tmp
+    # Write via tmp staging
     printf '%b' "$xml_lines" > "/tmp/privapp-${pkg}.xml"
     $ADB -s "$SERIAL" push "/tmp/privapp-${pkg}.xml" "/data/local/tmp/privapp-${pkg}.xml" >/dev/null 2>&1
     _su "cp /data/local/tmp/privapp-${pkg}.xml '$xml_path'"
@@ -1735,57 +1927,207 @@ _write_privapp_permissions_xml() {
 
     local check; check=$(_su "[ -f '$xml_path' ] && echo ok")
     if [[ "$check" == "ok" ]]; then
-        echo -e "  ${GREEN}✓ privapp-permissions XML written${ENDC}"
+        echo -e "  ${GREEN}✓ privapp-permissions XML written (${BOLD}$perm_count${ENDC}${GREEN} permissions whitelisted)${ENDC}"
+        echo -e "  ${CYAN}  PM will never block these permissions regardless of API level.${ENDC}"
     else
-        echo -e "  ${YELLOW}⚠ privapp XML write failed (non-fatal — perms may still work)${ENDC}"
+        echo -e "  ${YELLOW}⚠ privapp XML write failed — trying alternate path…${ENDC}"
+        # Fallback: try /system/etc/permissions/ regardless
+        if [[ "$xml_base" != "/system/etc/permissions" ]]; then
+            local fallback_path="/system/etc/permissions/${xml_filename}"
+            _su "cp /data/local/tmp/privapp-${pkg}.xml '$fallback_path' 2>/dev/null"
+            _su "chown root:root '$fallback_path' && chmod 644 '$fallback_path'" 2>/dev/null
+            local fb_check; fb_check=$(_su "[ -f '$fallback_path' ] && echo ok")
+            if [[ "$fb_check" == "ok" ]]; then
+                echo -e "  ${GREEN}✓ Fallback: XML written to $fallback_path${ENDC}"
+            else
+                echo -e "  ${YELLOW}⚠ privapp XML write failed (non-fatal — perms may still work)${ENDC}"
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ privapp XML write failed (non-fatal — perms may still work)${ENDC}"
+        fi
     fi
 }
 
-# Grant Magisk/KernelSU root access to a package
+# Grant Magisk/KernelSU/APatch root access to a package
+# Writes directly into the root manager's SQLite policy database by package UID.
+# The app receives root silently on first launch — no popup required.
 _grant_root_to_app() {
     local pkg="$1"
-    echo -e "  ${CYAN}Attempting to grant root access to $pkg…${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ Root Access Grant ────────────────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Write root policy directly — no popup on first launch  ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${ENDC}"
+    echo ""
 
-    # Detect Magisk
-    local magisk_db="/data/data/com.topjohnwu.magisk/databases/magisk.db"
-    local magisk_db_alt="/data/user/0/com.topjohnwu.magisk/databases/magisk.db"
-    local db_path=""
+    # Resolve package UID first (needed for all managers)
+    local uid=""
+    uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
+    if [[ -z "$uid" ]]; then
+        # App might not be installed yet (we're in push_system_app flow)
+        echo -e "  ${YELLOW}⚠ Package not yet installed — UID unknown.${ENDC}"
+        echo -e "  ${YELLOW}  Root policy will be written after PM rescan.${ENDC}"
+        echo -e "  ${CYAN}  Setting deferred root grant flag…${ENDC}"
+        _DEFERRED_ROOT_GRANT="$pkg"
+        return 0
+    fi
 
-    for db in "$magisk_db" "$magisk_db_alt"; do
-        if [[ "$(_su "[ -f '$db' ] && echo yes")" == "yes" ]]; then
-            db_path="$db"; break
-        fi
+    echo -e "  ${CYAN}Package: $pkg  UID: $uid${ENDC}"
+    echo ""
+
+    # ── Detect root manager ─────────────────────────────────────
+    local root_manager="" db_path=""
+
+    # Magisk (multiple package names for forks)
+    local magisk_pkgs=("com.topjohnwu.magisk" "io.github.vvb2060.magisk" "io.github.huskydg.magisk" "com.fox2code.mmm")
+    for mpkg in "${magisk_pkgs[@]}"; do
+        for ddir in "/data/data/$mpkg/databases" "/data/user/0/$mpkg/databases" "/data/user_de/0/$mpkg/databases"; do
+            local mdb="$ddir/magisk.db"
+            if [[ "$(_su "[ -f '$mdb' ] && echo yes")" == "yes" ]]; then
+                root_manager="magisk"; db_path="$mdb"; break 2
+            fi
+        done
     done
 
-    if [[ -n "$db_path" ]]; then
-        # uid from pm: get uid of package
-        local uid
-        uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
-        if [[ -n "$uid" ]]; then
-            _su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO policies (uid,package_name,policy,until,logging,notification) VALUES($uid,'$pkg',2,0,1,1);\""
-            echo -e "  ${GREEN}✓ Magisk root policy set for $pkg (uid=$uid)${ENDC}"
-        else
-            echo -e "  ${YELLOW}⚠ Could not determine UID — grant manually in Magisk app${ENDC}"
+    # Magisk Delta / Kitsune
+    if [[ -z "$root_manager" ]]; then
+        local alt_db="/data/adb/magisk.db"
+        if [[ "$(_su "[ -f '$alt_db' ] && echo yes")" == "yes" ]]; then
+            root_manager="magisk"; db_path="$alt_db"
         fi
-        return
     fi
 
-    # Detect KernelSU
-    local ksu_db="/data/data/me.weishu.kernelsu/databases/permission.db"
-    if [[ "$(_su "[ -f '$ksu_db' ] && echo yes")" == "yes" ]]; then
-        local uid
-        uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
-        if [[ -n "$uid" ]]; then
-            _su "sqlite3 '$ksu_db' \"INSERT OR REPLACE INTO uid_policy (uid, allow_su, profile_id) VALUES($uid, 1, 0);\""
-            echo -e "  ${GREEN}✓ KernelSU root policy set for $pkg (uid=$uid)${ENDC}"
-        else
-            echo -e "  ${YELLOW}⚠ Could not determine UID — grant manually in KernelSU app${ENDC}"
-        fi
-        return
+    # KernelSU v1
+    if [[ -z "$root_manager" ]]; then
+        local ksu_db="/data/data/me.weishu.kernelsu/databases/permission.db"
+        local ksu_alt="/data/user/0/me.weishu.kernelsu/databases/permission.db"
+        for kdb in "$ksu_db" "$ksu_alt"; do
+            if [[ "$(_su "[ -f '$kdb' ] && echo yes")" == "yes" ]]; then
+                root_manager="kernelsu_v1"; db_path="$kdb"; break
+            fi
+        done
     fi
 
-    echo -e "  ${YELLOW}⚠ No Magisk or KernelSU database found — root grant skipped${ENDC}"
-    echo -e "  ${YELLOW}  Grant root manually from your superuser manager after reboot${ENDC}"
+    # KernelSU v2 (new package name + different DB schema)
+    if [[ -z "$root_manager" ]]; then
+        local ksu2_db="/data/data/me.weishu.kernelsu2/databases/ksud.db"
+        local ksu2_alt="/data/user/0/me.weishu.kernelsu2/databases/ksud.db"
+        local ksu2_adb="/data/adb/ksu/ksud.db"
+        for kdb in "$ksu2_db" "$ksu2_alt" "$ksu2_adb"; do
+            if [[ "$(_su "[ -f '$kdb' ] && echo yes")" == "yes" ]]; then
+                root_manager="kernelsu_v2"; db_path="$kdb"; break
+            fi
+        done
+    fi
+
+    # APatch
+    if [[ -z "$root_manager" ]]; then
+        local apatch_db="/data/adb/ap/su.db"
+        local apatch_alt="/data/data/me.bmax.apatch/databases/su.db"
+        for adb in "$apatch_db" "$apatch_alt"; do
+            if [[ "$(_su "[ -f '$adb' ] && echo yes")" == "yes" ]]; then
+                root_manager="apatch"; db_path="$adb"; break
+            fi
+        done
+    fi
+
+    if [[ -z "$root_manager" ]]; then
+        echo -e "  ${YELLOW}⚠ No root manager database found${ENDC}"
+        echo -e "  ${YELLOW}  Checked: Magisk, Magisk forks, KernelSU v1/v2, APatch${ENDC}"
+        echo -e "  ${CYAN}  Grant root manually from your superuser manager after reboot.${ENDC}"
+        return 0
+    fi
+
+    echo -e "  ${GREEN}✓ Detected: ${BOLD}$root_manager${ENDC}${GREEN}  DB: $db_path${ENDC}"
+    echo ""
+
+    # ── Write policy ─────────────────────────────────────────────
+    case "$root_manager" in
+        magisk)
+            echo -e "  ${CYAN}Writing Magisk su policy…${ENDC}"
+            # policy: 2 = allow, 1 = deny, 0 = ask
+            local result
+            result=$(_su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO policies (uid,package_name,policy,until,logging,notification) VALUES($uid,'$pkg',2,0,1,0);\" 2>&1")
+            if [[ -z "$result" || "$result" != *"Error"* ]]; then
+                echo -e "  ${GREEN}✓ Magisk root policy: ALLOW (uid=$uid, no popup, no notification)${ENDC}"
+                # Also update settings to ensure su is enabled
+                _su "sqlite3 '$db_path' \"INSERT OR IGNORE INTO settings (key,value) VALUES('su_access',1);\"" 2>/dev/null
+            else
+                echo -e "  ${RED}✗ SQLite write failed: $result${ENDC}"
+                echo -e "  ${YELLOW}  Grant manually in Magisk app → Superuser tab${ENDC}"
+            fi
+            ;;
+
+        kernelsu_v1)
+            echo -e "  ${CYAN}Writing KernelSU v1 policy…${ENDC}"
+            local result
+            result=$(_su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO uid_policy (uid, allow_su, profile_id) VALUES($uid, 1, 0);\" 2>&1")
+            if [[ -z "$result" || "$result" != *"Error"* ]]; then
+                echo -e "  ${GREEN}✓ KernelSU v1 root policy: ALLOW (uid=$uid)${ENDC}"
+            else
+                echo -e "  ${RED}✗ SQLite write failed: $result${ENDC}"
+                echo -e "  ${YELLOW}  Grant manually in KernelSU app${ENDC}"
+            fi
+            ;;
+
+        kernelsu_v2)
+            echo -e "  ${CYAN}Writing KernelSU v2 policy…${ENDC}"
+            # KernelSU v2 uses different schema
+            local result
+            result=$(_su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO su_policy (uid, package_name, allow, flags) VALUES($uid, '$pkg', 1, 0);\" 2>&1")
+            if [[ -z "$result" || "$result" != *"Error"* ]]; then
+                echo -e "  ${GREEN}✓ KernelSU v2 root policy: ALLOW (uid=$uid)${ENDC}"
+            else
+                # Fallback: try ksud CLI if available
+                local ksud_result
+                ksud_result=$(_su "ksud su --allow '$pkg' 2>&1" 2>/dev/null)
+                if echo "$ksud_result" | grep -qi "success\|granted\|allow"; then
+                    echo -e "  ${GREEN}✓ KernelSU v2 root granted via ksud CLI${ENDC}"
+                else
+                    echo -e "  ${RED}✗ KernelSU v2 policy write failed${ENDC}"
+                    echo -e "  ${YELLOW}  Grant manually in KernelSU app${ENDC}"
+                fi
+            fi
+            ;;
+
+        apatch)
+            echo -e "  ${CYAN}Writing APatch su policy…${ENDC}"
+            # APatch uses similar schema to Magisk
+            local result
+            result=$(_su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO policies (uid, package_name, policy, until, logging, notification) VALUES($uid, '$pkg', 2, 0, 1, 0);\" 2>&1")
+            if [[ -z "$result" || "$result" != *"Error"* ]]; then
+                echo -e "  ${GREEN}✓ APatch root policy: ALLOW (uid=$uid)${ENDC}"
+            else
+                # Fallback: try apd CLI
+                local apd_result
+                apd_result=$(_su "apd su --allow $uid 2>&1" 2>/dev/null)
+                if echo "$apd_result" | grep -qi "success\|ok"; then
+                    echo -e "  ${GREEN}✓ APatch root granted via apd CLI${ENDC}"
+                else
+                    echo -e "  ${RED}✗ APatch policy write failed${ENDC}"
+                    echo -e "  ${YELLOW}  Grant manually in APatch app${ENDC}"
+                fi
+            fi
+            ;;
+    esac
+
+    echo ""
+    echo -e "  ${CYAN}The app will receive root access silently on first launch.${ENDC}"
+    echo -e "  ${CYAN}No superuser popup dialog will appear.${ENDC}"
+}
+
+# Deferred root grant — called after PM rescan when UID becomes available
+_try_deferred_root_grant() {
+    [[ -z "${_DEFERRED_ROOT_GRANT:-}" ]] && return 0
+    local pkg="$_DEFERRED_ROOT_GRANT"
+    _DEFERRED_ROOT_GRANT=""
+    local uid
+    uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
+    if [[ -n "$uid" ]]; then
+        echo -e "  ${CYAN}Executing deferred root grant for $pkg (uid=$uid)…${ENDC}"
+        _grant_root_to_app "$pkg"
+    else
+        echo -e "  ${YELLOW}⚠ Still cannot resolve UID for $pkg — grant root manually${ENDC}"
+    fi
 }
 
 # ── Signing system ────────────────────────────────────────────
@@ -1922,7 +2264,6 @@ _extract_platform_key() {
     return 1  # Signal: use test key instead
 }
 
-# ── Signing menu ──────────────────────────────────────────────
 # ============================================================
 #  CLONE SIGNATURE FROM SYSTEM APP
 #  Extracts X.509 cert from any on-device APK, identifies if the
@@ -2406,16 +2747,16 @@ _build_sigspoof_module() {
     local src_apk="$2"   # local copy of source system APK (for cert extraction)
 
     echo ""
-    echo -e "  ${BOLD}${CYAN}┌─ Magisk Signature Spoof Module ──────────────┐${ENDC}"
-    echo -e "  ${BOLD}${CYAN}│${ENDC}  Makes PM return spoofed cert for your package ${BOLD}${CYAN}│${ENDC}"
-    echo -e "  ${BOLD}${CYAN}└──────────────────────────────────────────────┘${ENDC}"
+    echo -e "  ${BOLD}${MAGENTA}┌─ Magisk Signature Spoof Module ──────────────┐${ENDC}"
+    echo -e "  ${BOLD}${MAGENTA}│${ENDC}  PM returns spoofed cert for your package       ${BOLD}${MAGENTA}│${ENDC}"
+    echo -e "  ${BOLD}${MAGENTA}│${ENDC}  No private key required — works with OEM keys   ${BOLD}${MAGENTA}│${ENDC}"
+    echo -e "  ${BOLD}${MAGENTA}└──────────────────────────────────────────────┘${ENDC}"
     echo ""
-    echo -e "  ${YELLOW}How this works:${ENDC}"
-    echo "    The Magisk module injects a system property + a boot-time"
-    echo "    shell hook that patches PackageManager so it returns the"
-    echo "    cloned certificate fingerprint when queried for '$pkg'."
-    echo "    This fools signature-checking code (including Play Integrity"
-    echo "    at the app level) without any source APK modification."
+    echo -e "  ${BOLD}${WHITE}How this works:${ENDC}"
+    echo -e "  ${CYAN}  Boot-time hook patches PackageManager via Magisk${ENDC}"
+    echo -e "  ${CYAN}  to return the cloned cert fingerprint when queried${ENDC}"
+    echo -e "  ${CYAN}  for '${pkg}'. Fools signature-checking code without${ENDC}"
+    echo -e "  ${CYAN}  any source APK modification.${ENDC}"
     echo ""
 
     # We need the SHA-256 fingerprint of the SOURCE app's certificate
@@ -2490,7 +2831,7 @@ ui_print "- Done. Reboot to activate."
 CUSTEOF
 
     # ── Pack into zip ────────────────────────────────────────
-    echo -e "  ${CYAN}Building module zip…${ENDC}"
+    _pulse "Building module zip"
     if command -v zip &>/dev/null; then
         (cd "$module_build_dir" && zip -r "$module_zip" . -x "*.DS_Store") >/dev/null 2>&1
     else
@@ -2678,24 +3019,40 @@ _signing_menu() {
     SIGNED_APK_PATH=""
 
     echo ""
-    echo -e "  ${BOLD}${CYAN}┌─ APK Signing Options ──────────────────────────┐${ENDC}"
-    echo -e "  ${BOLD}${CYAN}│${ENDC}  Optional — only needed for your own custom apps ${BOLD}${CYAN}│${ENDC}"
-    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo -e "  ${BOLD}${CYAN}┌─ APK Signing Options ──────────────────────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  A consistent signing key = seamless updates + signature perms  ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────────────────────┘${ENDC}"
     echo ""
-    echo "  Why sign? A consistent signing key means:"
-    echo "    • Updates accepted without uninstall"
-    echo "    • System won't flag the app as unknown"
-    echo "    • Signature permissions work reliably"
-    echo "    • App treated as trusted as the source app"
+    echo -e "  ${BOLD}Why sign?${ENDC}"
+    echo "    • Updates accepted without uninstall  • System won't flag as unknown"
+    echo "    • Signature permissions work reliably  • sharedUserId sharing enabled"
     echo ""
-    echo "  Choose signing option:"
-    echo "    1. ⏭  Skip — use APK as-is (already signed / debug build)"
-    echo "    2. 🔑  Auto test-key — persistent droidB keystore"
-    echo "    3. 🗝  Custom keystore — your own .jks / .keystore"
-    echo "    4. 🏭  Inspect platform key (cert info only)"
-    echo "    5. 🪞  Clone signature from a system app on this device"
+    echo -e "  ${BOLD}Choose signing option:${ENDC}"
     echo ""
-    read -rp "  Choice [1-5, default=1]: " sign_choice
+    echo -e "  ${BOLD}1.${ENDC} ⏭  ${YELLOW}Skip${ENDC} — use APK as-is (already signed / debug build)"
+    echo ""
+    echo -e "  ${BOLD}2.${ENDC} 🔑  ${YELLOW}Auto test-key${ENDC}"
+    echo -e "     Generates a persistent keystore at ~/.droidb/keystores/<pkg>/"
+    echo -e "     Reused on every future push — updates install without uninstall."
+    echo ""
+    echo -e "  ${BOLD}3.${ENDC} 🗝  ${YELLOW}Custom keystore${ENDC} — bring your own .jks or .keystore file"
+    echo ""
+    echo -e "  ${BOLD}4.${ENDC} 🏭  ${YELLOW}Inspect platform key${ENDC}"
+    echo -e "     Pulls framework-res.apk, dumps platform cert info for reference."
+    echo ""
+    echo -e "  ${BOLD}5.${ENDC} 🪞  ${GREEN}Clone from system app${ENDC}  ${MAGENTA}← advanced${ENDC}"
+    echo -e "     Full signature cloning workflow — extract X.509 cert from any"
+    echo -e "     system APK, identify key origin, build matching keystore."
+    echo ""
+    echo -e "  ${BOLD}6.${ENDC} 🔐  ${GREEN}Import pk8 + pem${ENDC}  ${MAGENTA}← AOSP/ROM builders${ENDC}"
+    echo -e "     Import private key (.pk8) + certificate (.x509.pem) directly."
+    echo -e "     Produces bit-for-bit identical signature as the source."
+    echo -e "     ${CYAN}pk8 (DER) → openssl pkcs8 → key.pem"
+    echo -e "     x509.pem → openssl pkcs12 → bundle.p12"
+    echo -e "     → keytool -importkeystore → ~/.droidb/keystores/<pkg>/keystore.jks"
+    echo -e "     → apksigner sign → identical signer as source${ENDC}"
+    echo ""
+    read -rp "  Choice [1-6, default=1]: " sign_choice
 
     local signed_out="/tmp/droidb_signed_${pkg}.apk"
 
@@ -2736,7 +3093,6 @@ _signing_menu() {
             _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
             if _clone_system_app_signature "$pkg"; then
                 if [[ -n "${CLONED_KS_FILE:-}" && -f "${CLONED_KS_FILE}" ]]; then
-                    # Swap in cloned keystore and sign
                     KS_FILE="$CLONED_KS_FILE"
                     KS_PASS="$CLONED_KS_PASS"
                     KS_ALIAS="$CLONED_KS_ALIAS"
@@ -2748,7 +3104,6 @@ _signing_menu() {
                         } \
                         || SIGNED_APK_PATH="$apk_in"
                 else
-                    # Clone returned info only — fall back
                     echo -e "  ${YELLOW}No keystore produced — falling back to droidB test key.${ENDC}"
                     _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
                         && SIGNED_APK_PATH="$signed_out" \
@@ -2758,28 +3113,201 @@ _signing_menu() {
                 SIGNED_APK_PATH="$apk_in"
             fi
             ;;
+        6)
+            # Direct pk8 + pem import pipeline
+            _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
+            echo ""
+            echo -e "  ${BOLD}${CYAN}┌─ pk8 + pem Import Pipeline ────────────────────────────┐${ENDC}"
+            echo -e "  ${BOLD}${CYAN}│${ENDC}  Import AOSP/ROM build tree private key directly        ${BOLD}${CYAN}│${ENDC}"
+            echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────────────┘${ENDC}"
+            echo ""
+            echo -e "  ${YELLOW}Common AOSP key locations:${ENDC}"
+            echo "    build/target/product/security/testkey.pk8"
+            echo "    build/target/product/security/platform.pk8"
+            echo "    build/target/product/security/shared.pk8"
+            echo "    build/target/product/security/media.pk8"
+            echo ""
+            echo -e "  ${YELLOW}LineageOS/CalyxOS/GrapheneOS keys are in their build tree.${ENDC}"
+            echo ""
+
+            _import_pk8_pem_workflow "$pkg"
+
+            if [[ -n "${CLONED_KS_FILE:-}" && -f "${CLONED_KS_FILE}" ]]; then
+                KS_FILE="$CLONED_KS_FILE"
+                KS_PASS="$CLONED_KS_PASS"
+                KS_ALIAS="$CLONED_KS_ALIAS"
+                echo -e "\n  ${CYAN}Signing APK with imported key…${ENDC}"
+                _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                    && {
+                        SIGNED_APK_PATH="$signed_out"
+                        echo -e "  ${GREEN}✓ APK signed with imported pk8+pem identity${ENDC}"
+                        echo -e "  ${CYAN}  This APK has the EXACT same signer as the source.${ENDC}"
+                        echo -e "  ${CYAN}  sharedUserId sharing and signatureOrSystem perms enabled.${ENDC}"
+                    } \
+                    || SIGNED_APK_PATH="$apk_in"
+            else
+                echo -e "  ${YELLOW}No keystore produced — falling back to test key.${ENDC}"
+                _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                    && SIGNED_APK_PATH="$signed_out" \
+                    || SIGNED_APK_PATH="$apk_in"
+            fi
+            ;;
         *)
             SIGNED_APK_PATH="$apk_in" ;;
     esac
 }
 # ── Main system app push function ────────────────────────────
+# ── Non-root system-like app install ─────────────────────────
+# Uses adb install flags to get as close to system behavior as
+# possible without requiring root/remount.
+_push_app_nonroot() {
+    local APK="$1" PKG_NAME="$2"
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}┌─ Non-Root Install Mode ────────────────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${YELLOW}│${ENDC}  No root detected — using ADB install with elevated flags   ${BOLD}${YELLOW}│${ENDC}"
+    echo -e "  ${BOLD}${YELLOW}└────────────────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo -e "  ${CYAN}Capabilities without root:${ENDC}"
+    echo "    ✓ Install with all permissions auto-granted (-g)"
+    echo "    ✓ Replace existing app (-r)"
+    echo "    ✓ Downgrade to older version (-d)"
+    echo "    ✓ Grant runtime permissions via pm grant"
+    echo "    ✓ Sign APK with custom/test keystore"
+    echo "    ✗ Cannot push to /system partition"
+    echo "    ✗ Cannot write privapp-permissions XML"
+    echo "    ✗ Cannot grant Magisk/KernelSU root access"
+    echo "    ✗ App will NOT survive factory reset"
+    echo ""
+
+    # ── Permission profile ──────────────────────────────────
+    _SIGNING_APK_PATH="$APK"
+    _permission_profile_menu
+
+    # ── Signing ─────────────────────────────────────────────
+    _signing_menu "$APK" "$PKG_NAME"
+    local FINAL_APK="$SIGNED_APK_PATH"
+
+    # ── Install strategy ────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Install strategy:${ENDC}"
+    echo "    1. Standard install with permissions (-r -g)"
+    echo "    2. Allow downgrade + permissions (-r -g -d)"
+    echo "    3. Install as test-only app (-r -g -t)"
+    echo "    4. Full flags (-r -g -d -t --bypass-low-target-sdk-block)"
+    echo ""
+    read -rp "  Choice [1-4, default=1]: " inst_choice
+
+    local ADB_FLAGS="-r -g"
+    case "${inst_choice:-1}" in
+        2) ADB_FLAGS="-r -g -d" ;;
+        3) ADB_FLAGS="-r -g -t" ;;
+        4) ADB_FLAGS="-r -g -d -t --bypass-low-target-sdk-block" ;;
+    esac
+
+    # ── Summary ─────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Operation summary:${ENDC}"
+    echo -e "    Package    : ${CYAN}$PKG_NAME${ENDC}"
+    echo -e "    APK        : ${CYAN}$(basename "$FINAL_APK")${ENDC}"
+    echo -e "    Flags      : ${MAGENTA}$ADB_FLAGS${ENDC}"
+    local perm_cnt; perm_cnt=$(echo "$SELECTED_PERMS" | grep -c "android\." 2>/dev/null || echo 0)
+    echo -e "    Permissions: ${MAGENTA}$perm_cnt to auto-grant${ENDC}"
+    echo -e "    Mode       : ${YELLOW}Non-root (adb install)${ENDC}"
+    echo ""
+    read -rp "  Proceed? [y/N]: " confirm
+    [[ "${confirm,,}" != "y" ]] && { echo -e "  ${CYAN}Aborted.${ENDC}"; read -rp "  Press ENTER…" _; return; }
+
+    # ── Install ─────────────────────────────────────────────
+    echo ""
+    echo -e "  ${CYAN}Installing APK…${ENDC}"
+    _pulse "Installing $PKG_NAME" &
+    local pulse_pid=$!
+
+    local result
+    result=$($ADB -s "$SERIAL" install $ADB_FLAGS "$FINAL_APK" 2>&1)
+    kill $pulse_pid 2>/dev/null; wait $pulse_pid 2>/dev/null
+
+    if echo "$result" | grep -qi "success"; then
+        echo -e "\r  ${GREEN}✓ Installed successfully${ENDC}                          "
+    else
+        echo -e "\r  ${RED}✗ Install failed: $(echo "$result" | tail -1)${ENDC}"
+        echo ""
+        echo -e "  ${YELLOW}Troubleshooting:${ENDC}"
+        if echo "$result" | grep -qi "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
+            echo "    • Signature mismatch — uninstall existing app first"
+            echo "    • Or use option 2/4 for downgrade install"
+        elif echo "$result" | grep -qi "INSTALL_FAILED_VERSION_DOWNGRADE"; then
+            echo "    • Use option 2 (allow downgrade)"
+        elif echo "$result" | grep -qi "INSTALL_FAILED_TEST_ONLY"; then
+            echo "    • Use option 3 (test-only) or 4 (full flags)"
+        fi
+        [[ "$FINAL_APK" != "$APK" && -f "$FINAL_APK" ]] && rm -f "$FINAL_APK"
+        read -rp "  Press ENTER…" _; return
+    fi
+
+    # ── Grant permissions ───────────────────────────────────
+    if [[ -n "$SELECTED_PERMS" ]]; then
+        echo ""
+        echo -e "  ${BOLD}${CYAN}Granting permissions…${ENDC}"
+        local granted=0 failed=0
+        while IFS= read -r perm; do
+            [[ -z "$perm" ]] && continue
+            $ADB -s "$SERIAL" shell pm grant "$PKG_NAME" "$perm" 2>/dev/null
+            local check
+            check=$($ADB -s "$SERIAL" shell dumpsys package "$PKG_NAME" 2>/dev/null | grep "$perm" | grep "granted=true")
+            if [[ -n "$check" ]]; then
+                printf "  ${GREEN}✓${ENDC} %s\n" "$perm"
+                granted=$((granted+1))
+            else
+                printf "  ${YELLOW}~${ENDC} %s (install-time or not declared)\n" "$perm"
+                failed=$((failed+1))
+            fi
+        done <<< "$SELECTED_PERMS"
+        echo -e "\n  ${BOLD}Granted: ${GREEN}$granted${ENDC}  Skipped: ${YELLOW}$failed${ENDC}"
+    fi
+
+    # ── Clean up signed APK ─────────────────────────────────
+    [[ "$FINAL_APK" != "$APK" && -f "$FINAL_APK" ]] && rm -f "$FINAL_APK"
+
+    # ── Summary ─────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${GREEN}  ✓ App Installed (Non-Root)${ENDC}"
+    echo -e "${GREEN}  Package    : $PKG_NAME${ENDC}"
+    echo -e "${GREEN}  Permissions: $perm_cnt auto-granted${ENDC}"
+    [[ -n "${KS_FILE:-}" ]] && echo -e "${CYAN}  Keystore   : $KS_FILE${ENDC}"
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
+    echo ""
+    echo -e "  ${YELLOW}For system-level install (survives factory reset, priv-app${ENDC}"
+    echo -e "  ${YELLOW}permissions, root grant), root your device with Magisk/KernelSU.${ENDC}"
+
+    read -rp "  Press ENTER to return to App Management…" _
+}
+
+# ── Main system app push function ────────────────────────────
 push_system_app() {
     clear_screen
-    echo -e "${BOLD}${MAGENTA}🔧 PUSH APK AS SYSTEM APP${ENDC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
-    echo -e "${RED}${BOLD}⚠  TINKERERS ONLY — Root required. Wrong APKs can"
-    echo -e "   bootloop your device. Always back up first!${ENDC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}\n"
+    echo -e "${BOLD}${MAGENTA}"
+    echo "  ╔═══════════════════════════════════════════════════════════╗"
+    echo "  ║        🔧 PUSH APK AS SYSTEM APP — droidB v0.3.1        ║"
+    echo "  ║       Push custom APKs as trusted system applications    ║"
+    echo "  ╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}Feature overview:${ENDC}"
+    echo "    ├── /system/app & /system/priv-app placement"
+    echo "    ├── Auto permission grants (presets + manifest auto-detect)"
+    echo "    ├── APK signing (test-key / custom / pk8+pem import)"
+    echo "    ├── Signature cloning from device system apps"
+    echo "    ├── privapp-permissions XML generation"
+    echo "    ├── sharedUserId injection (run as system UID)"
+    echo "    └── Magisk/KernelSU/APatch silent root grants"
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo ""
 
-    # ── Root check ──────────────────────────────────────────
-    echo -e "  ${CYAN}Checking root access…${ENDC}"
-    if ! _check_root; then
-        echo -e "  ${RED}✗ Root not detected. Install Magisk or KernelSU.${ENDC}"
-        read -rp "  Press ENTER to return…" _; return
-    fi
-    echo -e "  ${GREEN}✓ Root confirmed${ENDC}\n"
-
-    # ── APK selection ───────────────────────────────────────
+    # ── APK selection (common to both modes) ────────────────
     echo -e "  ${YELLOW}Drag & drop APK or type path:${ENDC}"
     read -rp "  APK file: " APK_RAW
     local APK; APK=$(process_path "$APK_RAW")
@@ -2798,11 +3326,57 @@ push_system_app() {
     echo -e "    File    : ${CYAN}$APK_BASENAME${ENDC}"
     echo -e "    Size    : ${MAGENTA}$APK_SIZE${ENDC}"
 
+    # ── Root detection ──────────────────────────────────────
+    echo ""
+    echo -e "  ${CYAN}Detecting root access…${ENDC}"
+    local HAS_ROOT=false
+    if _check_root 2>/dev/null; then
+        HAS_ROOT=true
+        echo -e "  ${GREEN}✓ Root confirmed — full system push available${ENDC}"
+    else
+        echo -e "  ${YELLOW}⚠ Root not detected — limited to non-root install mode${ENDC}"
+    fi
+
+    # ── Mode selection ──────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Install mode:${ENDC}"
+    if $HAS_ROOT; then
+        echo -e "    ${BOLD}1.${ENDC} ${GREEN}🔒 Root system push${ENDC}  ${MAGENTA}← full control${ENDC}"
+        echo "       Push to /system partition, priv-app perms, root grant,"
+        echo "       signature cloning, sharedUserId. Survives factory reset."
+        echo ""
+        echo -e "    ${BOLD}2.${ENDC} ${YELLOW}📱 Non-root install${ENDC}"
+        echo "       ADB install with elevated flags + permission grants."
+        echo "       Cannot push to /system. Does NOT survive factory reset."
+        echo ""
+        read -rp "  Choice [1-2, default=1]: " mode_choice
+    else
+        echo -e "    ${RED}🔒 Root system push${ENDC}  (unavailable — no root)"
+        echo -e "    ${GREEN}📱 Non-root install${ENDC}  ${MAGENTA}← only option${ENDC}"
+        echo ""
+        mode_choice=2
+    fi
+
+    case "${mode_choice:-1}" in
+        2)
+            _push_app_nonroot "$APK" "$PKG_NAME"
+            return
+            ;;
+    esac
+
+    # ════════════════════════════════════════════════════════
+    #  ROOT MODE — Full system app push
+    # ════════════════════════════════════════════════════════
+    echo ""
+    echo -e "  ${RED}${BOLD}⚠  TINKERERS ONLY — Wrong APKs in /system can"
+    echo -e "     bootloop your device. Always back up first!${ENDC}"
+    echo ""
+
     # ── Step 1: Target directory ─────────────────────────────
     _pick_system_dir
 
     # ── Step 2: Permission profile ───────────────────────────
-    _SIGNING_APK_PATH="$APK"  # used by auto-detect inside _permission_profile_menu
+    _SIGNING_APK_PATH="$APK"
     _permission_profile_menu
 
     # ── Step 2.5: sharedUserId injection ─────────────────────
@@ -2817,7 +3391,11 @@ push_system_app() {
     # ── Step 4: Root grant ───────────────────────────────────
     local GRANT_ROOT="n"
     echo ""
-    read -rp "  Grant root access to this app via Magisk/KernelSU? [y/N]: " GRANT_ROOT
+    echo -e "  ${BOLD}Root access grant:${ENDC}"
+    echo "    Writes directly into Magisk/KernelSU/APatch SQLite policy DB."
+    echo "    The app receives root silently on first launch — no popup."
+    echo ""
+    read -rp "  Grant root access to this app? [y/N]: " GRANT_ROOT
 
     # ── Setup paths ──────────────────────────────────────────
     local APP_FOLDER="$SYS_TARGET/$PKG_NAME"
@@ -2827,22 +3405,47 @@ push_system_app() {
     local existing; existing=$(_su "[ -d '$APP_FOLDER' ] && echo exists")
     if [[ "$existing" == "exists" ]]; then
         echo -e "\n  ${YELLOW}⚠ App folder already exists: $APP_FOLDER${ENDC}"
-        echo "    1. Overwrite    2. Cancel"
-        read -rp "  Choice [1-2]: " ow_choice
-        [[ "${ow_choice:-2}" != "1" ]] && { echo -e "  ${CYAN}Cancelled.${ENDC}"; read -rp "  Press ENTER…" _; return; }
+        echo "    1. Overwrite (backup existing first)"
+        echo "    2. Overwrite (no backup)"
+        echo "    3. Cancel"
+        read -rp "  Choice [1-3]: " ow_choice
+        case "${ow_choice:-3}" in
+            1)
+                local bak_dir="$HOME/.droidb/backups/system_apps"
+                mkdir -p "$bak_dir"
+                echo -e "  ${CYAN}Backing up existing app…${ENDC}"
+                $ADB -s "$SERIAL" pull "$REMOTE_APK" "$bak_dir/${PKG_NAME}_backup_$(date +%Y%m%d_%H%M%S).apk" 2>/dev/null
+                echo -e "  ${GREEN}✓ Backup saved to $bak_dir/${ENDC}"
+                ;;
+            2) ;;
+            3|*) echo -e "  ${CYAN}Cancelled.${ENDC}"; read -rp "  Press ENTER…" _; return ;;
+        esac
     fi
 
     # ── Summary before commit ────────────────────────────────
     echo ""
+    echo -e "  ${BOLD}${CYAN}═══════════════════════════════════════════════════════${ENDC}"
     echo -e "  ${BOLD}Operation summary:${ENDC}"
-    echo -e "    Package    : ${CYAN}$PKG_NAME${ENDC}"
-    echo -e "    Destination: ${CYAN}$REMOTE_APK${ENDC}"
-    echo -e "    APK source : ${CYAN}$(basename "$FINAL_APK")${ENDC}"
+    echo -e "  ${CYAN}═══════════════════════════════════════════════════════${ENDC}"
+    echo -e "    Package     : ${CYAN}$PKG_NAME${ENDC}"
+    echo -e "    Destination : ${CYAN}$REMOTE_APK${ENDC}"
+    echo -e "    APK source  : ${CYAN}$(basename "$FINAL_APK")${ENDC}"
     local perm_cnt; perm_cnt=$(echo "$SELECTED_PERMS" | grep -c "android\." 2>/dev/null || echo 0)
-    echo -e "    Permissions: ${MAGENTA}$perm_cnt to auto-grant${ENDC}"
+    echo -e "    Permissions : ${MAGENTA}$perm_cnt to auto-grant${ENDC}"
     [[ -n "${SHARED_UID_APK:-}" ]] && echo -e "    sharedUserId: ${GREEN}injected${ENDC}"
-    [[ "$SYS_TARGET" == *"priv-app"* ]] && echo -e "    privapp XML: ${GREEN}yes${ENDC}"
-    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "    Root grant : ${GREEN}yes (Magisk/KernelSU)${ENDC}"
+    if [[ "$SYS_TARGET" == *"priv-app"* ]]; then
+        local priv_xml_target=""
+        case "$SYS_TARGET" in
+            /system/product/priv-app*)  priv_xml_target="/system/product/etc/permissions/" ;;
+            /vendor/priv-app*)          priv_xml_target="/vendor/etc/permissions/" ;;
+            /system_ext/priv-app*)      priv_xml_target="/system_ext/etc/permissions/" ;;
+            *)                          priv_xml_target="/system/etc/permissions/" ;;
+        esac
+        echo -e "    privapp XML : ${GREEN}yes → ${priv_xml_target}${ENDC}"
+    fi
+    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "    Root grant  : ${GREEN}yes (Magisk/KernelSU/APatch — silent)${ENDC}"
+    [[ -n "${KS_FILE:-}" ]] && echo -e "    Signed with : ${CYAN}$KS_FILE${ENDC}"
+    echo -e "  ${CYAN}═══════════════════════════════════════════════════════${ENDC}"
     echo ""
     read -rp "  Proceed? [y/N]: " confirm
     [[ "${confirm,,}" != "y" ]] && { echo -e "  ${CYAN}Aborted.${ENDC}"; read -rp "  Press ENTER…" _; return; }
@@ -2853,14 +3456,17 @@ push_system_app() {
     _remount_rw || { read -rp "  Press ENTER…" _; return; }
 
     # ── Create dir & push APK ────────────────────────────────
-    echo -e "  ${CYAN}Creating app directory…${ENDC}"
+    _bsec "Creating app directory" 2>/dev/null || echo -e "  ${CYAN}Creating app directory…${ENDC}"
     _su "mkdir -p '$APP_FOLDER'"
 
     echo -e "  ${CYAN}Uploading APK via staging…${ENDC}"
+    _loader "Pushing APK to device" 3 &
+    local loader_pid=$!
     $ADB -s "$SERIAL" push "$FINAL_APK" "/data/local/tmp/$PKG_NAME.apk" 2>&1 \
         | grep -v "^$" | sed 's/^/    /'
     _su "cp /data/local/tmp/$PKG_NAME.apk '$REMOTE_APK'"
     _su "rm /data/local/tmp/$PKG_NAME.apk"
+    kill $loader_pid 2>/dev/null; wait $loader_pid 2>/dev/null
 
     # ── Verify ───────────────────────────────────────────────
     local landed; landed=$(_su "[ -f '$REMOTE_APK' ] && stat -c '%s' '$REMOTE_APK'")
@@ -2900,21 +3506,27 @@ push_system_app() {
         _grant_root_to_app "$PKG_NAME"
     fi
 
+    # ── Try deferred root grant if needed ────────────────────
+    _try_deferred_root_grant 2>/dev/null
+
     # ── Clean up signed/patched tmp APKs ─────────────────────
     [[ "$FINAL_APK" != "$APK" && -f "$FINAL_APK" ]] && rm -f "$FINAL_APK"
     [[ -n "${SHARED_UID_APK:-}" && "$SHARED_UID_APK" != "$APK" ]] && rm -f "$SHARED_UID_APK"
 
     # ── Summary ──────────────────────────────────────────────
     echo ""
-    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
-    echo -e "${BOLD}${GREEN}  ✓ System App Installed & Configured${ENDC}"
-    echo -e "${GREEN}  Package    : $PKG_NAME${ENDC}"
-    echo -e "${GREEN}  Location   : $REMOTE_APK${ENDC}"
+    echo -e "${BOLD}${GREEN}╔═══════════════════════════════════════════════════════╗${ENDC}"
+    echo -e "${BOLD}${GREEN}║  ✓ System App Installed & Configured                 ║${ENDC}"
+    echo -e "${BOLD}${GREEN}╠═══════════════════════════════════════════════════════╣${ENDC}"
+    echo -e "${GREEN}  Package     : $PKG_NAME${ENDC}"
+    echo -e "${GREEN}  Location    : $REMOTE_APK${ENDC}"
     local perm_cnt2; perm_cnt2=$(echo "$SELECTED_PERMS" | grep -c "android\." 2>/dev/null || echo 0)
-    echo -e "${GREEN}  Permissions: $perm_cnt2 auto-granted${ENDC}"
-    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "${GREEN}  Root access: granted${ENDC}"
-    [[ -n "${KS_FILE:-}" ]] && echo -e "${CYAN}  Keystore   : $KS_FILE${ENDC}"
-    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "${GREEN}  Permissions : $perm_cnt2 auto-granted${ENDC}"
+    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "${GREEN}  Root access : granted (silent — no popup)${ENDC}"
+    [[ -n "${KS_FILE:-}" ]] && echo -e "${CYAN}  Keystore    : $KS_FILE${ENDC}"
+    [[ -n "${SHARED_UID_APK:-}" ]] && echo -e "${CYAN}  sharedUserId: injected${ENDC}"
+    [[ "$SYS_TARGET" == *"priv-app"* ]] && echo -e "${CYAN}  privapp XML : written${ENDC}"
+    echo -e "${BOLD}${GREEN}╚═══════════════════════════════════════════════════════╝${ENDC}"
 
     echo ""
     echo -e "  ${YELLOW}Reboot recommended to fully activate the system app.${ENDC}"
@@ -2946,7 +3558,7 @@ app_management_menu() {
         echo "5. List third-party apps"
         echo "6. Clear app data"
         echo "7. Force stop app"
-        echo "8. 🔧 Push APK as System App (tinkerers)"
+        echo "8. 🔧 Push APK as System App (root + non-root)"
         echo "9. Back"
         echo ""
         
@@ -2957,12 +3569,111 @@ app_management_menu() {
                 echo -e "${YELLOW}Drag & drop APK or type path:${ENDC}"
                 read -p "APK file: " APK
                 APK=$(process_path "$APK")
-                if [[ -f "$APK" ]]; then
-                    echo -e "${BLUE}Installing...${ENDC}"
-                    $ADB -s $SERIAL install -r "$APK"
-                    [[ $? -eq 0 ]] && echo -e "${GREEN}✓ Installed successfully${ENDC}" || echo -e "${RED}✗ Installation failed${ENDC}"
-                else
+                if [[ ! -f "$APK" ]]; then
                     echo -e "${RED}File not found${ENDC}"
+                    read -p "Press Enter..."; continue
+                fi
+
+                # Validate APK structure
+                _validate_apk "$APK" || { read -p "Press Enter..."; continue; }
+
+                # Detect root availability
+                local has_root=false
+                local root_id
+                root_id=$($ADB -s "$SERIAL" shell "su -c 'id' 2>/dev/null" 2>/dev/null | tr -d '\r')
+                echo "$root_id" | grep -q "uid=0" && has_root=true
+
+                # Get package info if aapt available
+                local pkg_label=""
+                if command -v aapt &>/dev/null; then
+                    pkg_label=$(aapt dump badging "$APK" 2>/dev/null | grep "^package:" | grep -oP "name='\K[^']+")
+                fi
+                [[ -n "$pkg_label" ]] && echo -e "${CYAN}Package: $pkg_label${ENDC}"
+
+                echo ""
+                echo -e "${BOLD}Install method:${ENDC}"
+                echo "  1. Standard install (non-root, user space)"
+                echo "  2. Install + grant all runtime permissions"
+                echo "  3. Downgrade install (replace newer version)"
+                if $has_root; then
+                    echo "  4. Root install via pm (bypasses some restrictions)"
+                    echo "  5. Install as system app (root, survives factory reset)"
+                else
+                    echo -e "  ${YELLOW}4-5. Root install (root not detected — unavailable)${ENDC}"
+                fi
+                echo ""
+                read -rp "  Method [1-5, default=1]: " install_method
+
+                local install_ok=false
+                case "${install_method:-1}" in
+                    1)
+                        echo -e "${BLUE}Installing (standard)…${ENDC}"
+                        _pulse "Pushing APK to device"
+                        $ADB -s "$SERIAL" install -r "$APK" 2>&1 | tail -3
+                        [[ ${PIPESTATUS[0]} -eq 0 ]] && install_ok=true
+                        ;;
+                    2)
+                        echo -e "${BLUE}Installing with all permissions…${ENDC}"
+                        _pulse "Installing + granting permissions"
+                        $ADB -s "$SERIAL" install -r -g "$APK" 2>&1 | tail -3
+                        [[ ${PIPESTATUS[0]} -eq 0 ]] && install_ok=true
+                        ;;
+                    3)
+                        echo -e "${BLUE}Downgrade installing…${ENDC}"
+                        _pulse "Forcing downgrade install"
+                        $ADB -s "$SERIAL" install -r -d "$APK" 2>&1 | tail -3
+                        if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+                            echo -e "${YELLOW}Standard downgrade failed, trying with -g flag…${ENDC}"
+                            $ADB -s "$SERIAL" install -r -d -g "$APK" 2>&1 | tail -3
+                            [[ ${PIPESTATUS[0]} -eq 0 ]] && install_ok=true
+                        else
+                            install_ok=true
+                        fi
+                        ;;
+                    4)
+                        if ! $has_root; then
+                            echo -e "${RED}✗ Root not available${ENDC}"
+                        else
+                            echo -e "${BLUE}Installing via root pm…${ENDC}"
+                            _pulse "Staging APK on device"
+                            $ADB -s "$SERIAL" push "$APK" "/data/local/tmp/_droidb_install.apk" >/dev/null 2>&1
+                            echo -e "${CYAN}Running pm install as root…${ENDC}"
+                            local pm_result
+                            pm_result=$($ADB -s "$SERIAL" shell "su -c 'pm install -r -g /data/local/tmp/_droidb_install.apk' 2>&1" | tr -d '\r')
+                            echo "  $pm_result"
+                            echo "$pm_result" | grep -qi "success" && install_ok=true
+                            # Try alternative flags if first attempt failed
+                            if ! $install_ok; then
+                                echo -e "${YELLOW}Retrying with bypass flags…${ENDC}"
+                                pm_result=$($ADB -s "$SERIAL" shell "su -c 'pm install -r -g -d --bypass-low-target-sdk-block /data/local/tmp/_droidb_install.apk' 2>&1" | tr -d '\r')
+                                echo "  $pm_result"
+                                echo "$pm_result" | grep -qi "success" && install_ok=true
+                            fi
+                            $ADB -s "$SERIAL" shell "su -c 'rm /data/local/tmp/_droidb_install.apk'" 2>/dev/null
+                        fi
+                        ;;
+                    5)
+                        push_system_app
+                        install_ok=true  # handled internally
+                        ;;
+                    *)
+                        echo -e "${RED}Invalid method${ENDC}"
+                        ;;
+                esac
+
+                if $install_ok; then
+                    echo -e "\n${GREEN}✓ APK installed successfully${ENDC}"
+                    # Offer to grant permissions post-install if we have package name
+                    if [[ -n "$pkg_label" ]] && $has_root; then
+                        echo -e "${CYAN}Tip: Run option 8 (Push as System App) for full permission control + signing${ENDC}"
+                    fi
+                elif [[ "${install_method:-1}" != "5" ]]; then
+                    echo -e "\n${RED}✗ Installation failed${ENDC}"
+                    echo -e "${YELLOW}Troubleshooting:${ENDC}"
+                    echo -e "  • Ensure USB debugging is authorized"
+                    echo -e "  • Try method 3 (downgrade) if version conflict"
+                    echo -e "  • Try method 4 (root) to bypass restrictions"
+                    echo -e "  • Check 'adb logcat | grep -i install' for details"
                 fi
                 read -p "Press Enter..."
                 ;;
@@ -3332,6 +4043,16 @@ install_systemwide() {
 check_requirements() {
     create_embedded_debloat_list
     
+    # Animated startup
+    echo -e "${CYAN}"
+    local init_steps=("Initializing droidB v${VERSION}" "Checking ADB" "Scanning tools" "Ready")
+    for step in "${init_steps[@]}"; do
+        printf "\r  ⟫ %s…  " "$step"
+        sleep 0.15
+    done
+    printf "\r  ${GREEN}✓ droidB v${VERSION} initialized${ENDC}              \n"
+    echo -e "${ENDC}"
+
     if ! command -v adb &>/dev/null; then
         echo -e "${RED}ERROR: ADB not found${ENDC}"
         echo "Install android-tools package for your system"
@@ -3350,23 +4071,72 @@ check_requirements() {
 }
 
 # ============================================================
-#  FULL DEVICE BACKUP  (v0.3.0 — pre-flash data protection)
+#  FULL DEVICE BACKUP  (v0.3.1 — enhanced Android 14+ compat)
 # ============================================================
 
-# Helper: progress spinner
+# Helper: animated progress spinner with elapsed time
 _spin() {
     local pid=$1 msg=$2
-    local sp='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    local i=0
+    local frames=('⣾' '⣽' '⣻' '⢿' '⡿' '⣟' '⣯' '⣷')
+    local colors=("\033[96m" "\033[94m" "\033[95m" "\033[96m" "\033[92m" "\033[93m" "\033[94m" "\033[95m")
+    local i=0 elapsed=0
     while kill -0 "$pid" 2>/dev/null; do
-        printf "\r  ${CYAN}%s${ENDC} %s " "${sp:$((i%10)):1}" "$msg"
+        local ci=$((i % ${#frames[@]}))
+        printf "\r  ${colors[$ci]}%s${ENDC} %s ${YELLOW}[%ds]${ENDC} " "${frames[$ci]}" "$msg" "$elapsed"
         i=$((i+1)); sleep 0.1
+        elapsed=$(( i / 10 ))
     done
-    printf "\r  ${GREEN}✓${ENDC} %-60s\n" "$msg"
+    printf "\r  ${GREEN}✓${ENDC} %-55s ${GREEN}[%ds]${ENDC}\n" "$msg" "$elapsed"
 }
 
-# Helper: section header
-_bsec() { echo -e "\n${BOLD}${CYAN}▶ $1${ENDC}"; echo -e "${YELLOW}$(printf '─%.0s' {1..60})${ENDC}"; }
+# Helper: animated task loader (non-blocking visual for quick ops)
+_loader() {
+    local msg="$1" duration="${2:-1}"
+    local bar_chars=('░' '▒' '▓' '█')
+    local width=30
+    local steps=$((duration * 10))
+    [[ $steps -lt 5 ]] && steps=5
+    for ((s=0; s<=steps; s++)); do
+        local pct=$((s * 100 / steps))
+        local filled=$((s * width / steps))
+        local empty=$((width - filled))
+        local bar=""
+        for ((b=0; b<filled; b++)); do
+            local ci=$(( (b + s) % ${#bar_chars[@]} ))
+            bar+="${bar_chars[$ci]}"
+        done
+        for ((b=0; b<empty; b++)); do bar+='░'; done
+        printf "\r  ${CYAN}⟫${ENDC} %s ${MAGENTA}[%s]${ENDC} ${BOLD}%3d%%${ENDC}" "$msg" "$bar" "$pct"
+        sleep 0.1
+    done
+    printf "\r  ${GREEN}✓${ENDC} %-55s ${GREEN}[done]${ENDC}\n" "$msg"
+}
+
+# Helper: pulsing text animation for section transitions
+_pulse() {
+    local msg="$1"
+    local pulse_chars=('●' '◉' '○' '◎' '●' '◉')
+    for c in "${pulse_chars[@]}"; do
+        printf "\r  ${CYAN}%s ${BOLD}%s${ENDC}" "$c" "$msg"
+        sleep 0.12
+    done
+    printf "\r  ${GREEN}▶${ENDC} ${BOLD}%s${ENDC}\n" "$msg"
+}
+
+# Helper: section header (animated)
+_bsec() {
+    echo ""
+    local text="$1"
+    local line=""
+    for ((i=0; i<60; i++)); do line+="─"; done
+    printf "  ${BOLD}${CYAN}"
+    for ((i=0; i<${#text}+4; i++)); do
+        printf "▸"
+        sleep 0.008
+    done
+    printf "\r  ${BOLD}${CYAN}▶ %s${ENDC}\n" "$text"
+    echo -e "  ${YELLOW}${line}${ENDC}"
+}
 
 # Helper: size of local dir/file
 _sz() { du -sh "$1" 2>/dev/null | cut -f1; }
@@ -3386,6 +4156,11 @@ _backup_pick_dest() {
 backup_sms() {
     _bsec "SMS Messages"
     local out="$BACKUP_DIR/sms_mms.ab"
+    local csv="$BACKUP_DIR/sms_dump.csv"
+    local success=false
+
+    # ── Method 1: adb backup ─────────────────────────────────
+    _pulse "Method 1: ADB backup"
     echo -e "  ${YELLOW}Unlocking device before adb backup — accept the prompt on screen${ENDC}"
     $ADB -s "$SERIAL" backup -noapk -noshared com.android.providers.telephony -f "$out" &
     local pid=$!
@@ -3393,23 +4168,65 @@ backup_sms() {
     wait $pid
     if [[ -f "$out" && -s "$out" ]]; then
         echo -e "  ${GREEN}✓ SMS/MMS saved (${MAGENTA}$(_sz "$out")${GREEN})${ENDC}"
+        success=true
     else
-        # fallback: content query CSV export
-        echo -e "  ${YELLOW}⚠ adb backup blocked — trying content provider dump…${ENDC}"
-        local csv="$BACKUP_DIR/sms_dump.csv"
+        echo -e "  ${YELLOW}⚠ adb backup blocked — trying fallbacks…${ENDC}"
+    fi
+
+    # ── Method 2: Content provider CSV ───────────────────────
+    if ! $success; then
+        _pulse "Method 2: Content provider dump"
         echo "date,address,type,body" > "$csv"
-        $ADB -s "$SERIAL" shell content query \
-            --uri content://sms \
-            --projection date,address,type,body 2>/dev/null \
-            | sed 's/Row: [0-9]* //' \
-            | sed 's/, /\t/g' \
-            >> "$csv"
-        local rows; rows=$(wc -l < "$csv")
-        if [[ $rows -gt 1 ]]; then
-            echo -e "  ${GREEN}✓ SMS CSV dump: $((rows-1)) messages → sms_dump.csv${ENDC}"
-        else
-            echo -e "  ${RED}✗ SMS backup failed (no root / blocked by ROM)${ENDC}"
+        local sms_data
+        sms_data=$($ADB -s "$SERIAL" shell "content query --uri content://sms --projection date,address,type,body 2>/dev/null" 2>/dev/null | tr -d '\r')
+        if echo "$sms_data" | grep -q "Row:"; then
+            echo "$sms_data" \
+                | sed 's/Row: [0-9]* //' \
+                | sed 's/, /\t/g' \
+                >> "$csv"
+            local rows; rows=$(wc -l < "$csv")
+            if [[ $rows -gt 1 ]]; then
+                echo -e "  ${GREEN}✓ SMS CSV dump: $((rows-1)) messages → sms_dump.csv${ENDC}"
+                success=true
+            fi
         fi
+    fi
+
+    # ── Method 3: Root — pull mmssms.db ──────────────────────
+    if ! $success; then
+        _pulse "Method 3: Root database pull"
+        local has_root=false
+        local root_test
+        root_test=$($ADB -s "$SERIAL" shell "su -c 'id' 2>/dev/null" 2>/dev/null | tr -d '\r')
+        echo "$root_test" | grep -q "uid=0" && has_root=true
+
+        if $has_root; then
+            local db_paths=(
+                "/data/data/com.android.providers.telephony/databases/mmssms.db"
+                "/data/user/0/com.android.providers.telephony/databases/mmssms.db"
+                "/data/data/com.google.android.providers.telephony/databases/mmssms.db"
+            )
+            for db_path in "${db_paths[@]}"; do
+                local exists
+                exists=$($ADB -s "$SERIAL" shell "su -c '[ -f \"$db_path\" ] && echo yes'" 2>/dev/null | tr -d '\r')
+                if [[ "$exists" == "yes" ]]; then
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"$db_path\" /data/local/tmp/_sms.db && chmod 644 /data/local/tmp/_sms.db'" 2>/dev/null
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"${db_path}-wal\" /data/local/tmp/_sms.db-wal 2>/dev/null; chmod 644 /data/local/tmp/_sms.db-wal 2>/dev/null'" 2>/dev/null
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_sms.db" "$BACKUP_DIR/mmssms.db" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_sms.db-wal" "$BACKUP_DIR/mmssms.db-wal" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" shell "su -c 'rm -f /data/local/tmp/_sms.db*'" 2>/dev/null
+                    if [[ -f "$BACKUP_DIR/mmssms.db" && -s "$BACKUP_DIR/mmssms.db" ]]; then
+                        echo -e "  ${GREEN}✓ SMS database pulled (${MAGENTA}$(_sz "$BACKUP_DIR/mmssms.db")${GREEN}) → mmssms.db${ENDC}"
+                        success=true
+                    fi
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if ! $success; then
+        echo -e "  ${RED}✗ SMS backup failed (no root / blocked by ROM)${ENDC}"
     fi
 }
 
@@ -3417,37 +4234,133 @@ backup_sms() {
 backup_contacts() {
     _bsec "Contacts"
     local vcf="$BACKUP_DIR/contacts.vcf"
-    # Try vCard export via content provider
-    $ADB -s "$SERIAL" shell content query \
-        --uri content://com.android.contacts/contacts 2>/dev/null \
-        | grep -q "Row:" && {
-        # proper vCard pull via vcard MIME type stream
-        $ADB -s "$SERIAL" shell "
-            for id in \$(content query --uri content://com.android.contacts/contacts --projection _id 2>/dev/null | grep -oP '_id=\K[0-9]+'); do
-                content read --uri \"content://com.android.contacts/contacts/\$id/display_photo\" 2>/dev/null
-            done" > /dev/null 2>&1
-        # Use adb backup for contacts DB
+    local csv="$BACKUP_DIR/contacts.csv"
+    local success=false
+
+    # ── Method 1: content query → VCF via lookup key ─────────
+    _pulse "Method 1: Content provider VCF export"
+    local contact_ids
+    contact_ids=$($ADB -s "$SERIAL" shell "content query --uri content://com.android.contacts/contacts --projection _id,lookup,display_name 2>/dev/null" 2>/dev/null | tr -d '\r')
+
+    if echo "$contact_ids" | grep -q "_id="; then
+        echo -e "  ${CYAN}Contacts provider accessible — extracting vCards…${ENDC}"
+        # Build vCards by querying each contact's lookup URI
+        > "$vcf"  # truncate
+        local count=0
+        while IFS= read -r row; do
+            local cid; cid=$(echo "$row" | grep -oP '_id=\K[0-9]+')
+            local lookup; lookup=$(echo "$row" | grep -oP 'lookup=\K[^,]+' | tr -d ' ')
+            [[ -z "$cid" ]] && continue
+            # Try as_vcard for individual contact
+            local vcard_data
+            vcard_data=$($ADB -s "$SERIAL" shell "content read --uri 'content://com.android.contacts/contacts/$cid/as_vcard'" 2>/dev/null | tr -d '\r')
+            if echo "$vcard_data" | grep -q "BEGIN:VCARD"; then
+                echo "$vcard_data" >> "$vcf"
+                count=$((count + 1))
+            fi
+        done <<< "$contact_ids"
+        if [[ $count -gt 0 ]]; then
+            echo -e "  ${GREEN}✓ $count contact(s) exported as vCard → contacts.vcf${ENDC}"
+            success=true
+        else
+            echo -e "  ${YELLOW}⚠ VCF export returned empty — ROM may block vCard reads${ENDC}"
+        fi
+    fi
+
+    # ── Method 2: CSV dump via content query (works on more ROMs) ──
+    if ! $success; then
+        _pulse "Method 2: Content query CSV dump"
+        echo "display_name,phone_number,email" > "$csv"
+        # Query raw contacts with phone numbers
+        local phone_data
+        phone_data=$($ADB -s "$SERIAL" shell "content query --uri content://com.android.contacts/data/phones --projection display_name,data1 2>/dev/null" 2>/dev/null | tr -d '\r')
+        if echo "$phone_data" | grep -q "display_name="; then
+            while IFS= read -r row; do
+                local name; name=$(echo "$row" | grep -oP 'display_name=\K[^,]+' | sed 's/^ *//;s/ *$//')
+                local phone; phone=$(echo "$row" | grep -oP 'data1=\K[^,]+' | sed 's/^ *//;s/ *$//')
+                [[ -n "$name" ]] && echo "\"$name\",\"$phone\",\"\"" >> "$csv"
+            done <<< "$phone_data"
+            local csv_rows; csv_rows=$(( $(wc -l < "$csv") - 1 ))
+            if [[ $csv_rows -gt 0 ]]; then
+                echo -e "  ${GREEN}✓ $csv_rows contact(s) dumped → contacts.csv${ENDC}"
+                success=true
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ Phone data query blocked${ENDC}"
+        fi
+    fi
+
+    # ── Method 3: Root — pull contacts2.db directly ──────────
+    if ! $success; then
+        _pulse "Method 3: Root database pull"
+        local has_root=false
+        local root_test
+        root_test=$($ADB -s "$SERIAL" shell "su -c 'id' 2>/dev/null" 2>/dev/null | tr -d '\r')
+        echo "$root_test" | grep -q "uid=0" && has_root=true
+
+        if $has_root; then
+            echo -e "  ${CYAN}Root detected — pulling contacts database directly…${ENDC}"
+            local db_paths=(
+                "/data/data/com.android.providers.contacts/databases/contacts2.db"
+                "/data/user/0/com.android.providers.contacts/databases/contacts2.db"
+                "/data/data/com.google.android.providers.contacts/databases/contacts2.db"
+            )
+            local pulled=false
+            for db_path in "${db_paths[@]}"; do
+                local exists
+                exists=$($ADB -s "$SERIAL" shell "su -c '[ -f \"$db_path\" ] && echo yes'" 2>/dev/null | tr -d '\r')
+                if [[ "$exists" == "yes" ]]; then
+                    echo -e "  ${CYAN}Found: $db_path${ENDC}"
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"$db_path\" /data/local/tmp/_contacts.db && chmod 644 /data/local/tmp/_contacts.db'" 2>/dev/null
+                    # Also grab the WAL and SHM for consistency
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"${db_path}-wal\" /data/local/tmp/_contacts.db-wal 2>/dev/null; cp \"${db_path}-shm\" /data/local/tmp/_contacts.db-shm 2>/dev/null; chmod 644 /data/local/tmp/_contacts.db-* 2>/dev/null'" 2>/dev/null
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_contacts.db" "$BACKUP_DIR/contacts2.db" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_contacts.db-wal" "$BACKUP_DIR/contacts2.db-wal" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_contacts.db-shm" "$BACKUP_DIR/contacts2.db-shm" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" shell "su -c 'rm -f /data/local/tmp/_contacts.db*'" 2>/dev/null
+                    if [[ -f "$BACKUP_DIR/contacts2.db" && -s "$BACKUP_DIR/contacts2.db" ]]; then
+                        echo -e "  ${GREEN}✓ Contacts database pulled (${MAGENTA}$(_sz "$BACKUP_DIR/contacts2.db")${GREEN}) → contacts2.db${ENDC}"
+                        # Try to extract CSV from the DB if sqlite3 is available
+                        if command -v sqlite3 &>/dev/null; then
+                            echo -e "  ${CYAN}Extracting CSV from database…${ENDC}"
+                            sqlite3 -header -csv "$BACKUP_DIR/contacts2.db" \
+                                "SELECT display_name, data1 as phone FROM raw_contacts rc JOIN data d ON rc._id=d.raw_contact_id WHERE d.mimetype_id IN (SELECT _id FROM mimetypes WHERE mimetype='vnd.android.cursor.item/phone_v2') ORDER BY display_name;" \
+                                > "$csv" 2>/dev/null
+                            local db_rows; db_rows=$(wc -l < "$csv" 2>/dev/null || echo 0)
+                            [[ $db_rows -gt 1 ]] && echo -e "  ${GREEN}✓ $((db_rows-1)) contacts extracted → contacts.csv${ENDC}"
+                        fi
+                        success=true; pulled=true
+                    fi
+                    break
+                fi
+            done
+            [[ ! $pulled ]] && echo -e "  ${YELLOW}⚠ Contacts database not found at known paths${ENDC}"
+        else
+            echo -e "  ${YELLOW}⚠ No root access — cannot pull database${ENDC}"
+        fi
+    fi
+
+    # ── Method 4: adb backup fallback ────────────────────────
+    if ! $success; then
+        _pulse "Method 4: ADB backup (legacy)"
         local out="$BACKUP_DIR/contacts.ab"
+        echo -e "  ${YELLOW}Accept the backup prompt on your device screen${ENDC}"
         $ADB -s "$SERIAL" backup -noapk -noshared com.android.providers.contacts -f "$out" &>/dev/null &
         local pid=$!
-        _spin $pid "Backing up Contacts (accept prompt on device)…"
+        _spin $pid "Backing up Contacts via adb backup…"
         wait $pid
         if [[ -f "$out" && -s "$out" ]]; then
             echo -e "  ${GREEN}✓ Contacts DB backup (${MAGENTA}$(_sz "$out")${GREEN}) → contacts.ab${ENDC}"
-            return
+            success=true
         fi
-    }
-    # Fallback: vcard via content://com.android.contacts/contacts/as_vcard
-    echo -e "  ${YELLOW}Trying vCard stream export…${ENDC}"
-    $ADB -s "$SERIAL" shell \
-        "content read --uri \"content://com.android.contacts/contacts/as_vcard\"" \
-        > "$vcf" 2>/dev/null
-    local cnt; cnt=$(grep -c "^BEGIN:VCARD" "$vcf" 2>/dev/null || echo 0)
-    if [[ $cnt -gt 0 ]]; then
-        echo -e "  ${GREEN}✓ $cnt contact(s) saved → contacts.vcf${ENDC}"
-    else
-        echo -e "  ${RED}✗ Contacts backup failed (no root / blocked by ROM)${ENDC}"
-        rm -f "$vcf"
+    fi
+
+    if ! $success; then
+        echo -e "  ${RED}✗ All contact backup methods failed${ENDC}"
+        echo -e "  ${YELLOW}  Your ROM (Android 14+) may block content provider access.${ENDC}"
+        echo -e "  ${YELLOW}  Workaround: Export contacts as .vcf from your Contacts app${ENDC}"
+        echo -e "  ${YELLOW}  to /sdcard/ and use File Operations to pull it.${ENDC}"
+        rm -f "$vcf" "$csv" 2>/dev/null
     fi
 }
 
@@ -3455,24 +4368,130 @@ backup_contacts() {
 backup_call_logs() {
     _bsec "Call Logs"
     local csv="$BACKUP_DIR/call_logs.csv"
+    local success=false
+
+    # ── Method 1: Content provider query ─────────────────────
+    _pulse "Method 1: Content provider query"
     echo "date,number,name,duration_sec,type" > "$csv"
-    $ADB -s "$SERIAL" shell content query \
-        --uri content://call_log/calls \
-        --projection date,number,cachedName,duration,type 2>/dev/null \
-        | sed 's/Row: [0-9]* //' \
-        | sed 's/cachedName=/name=/g' \
-        | awk -F', ' '{
-            for(i=1;i<=NF;i++){
-                split($i,kv,"="); vals[kv[1]]=kv[2]
-            }
-            print vals["date"] "," vals["number"] "," vals["name"] "," vals["duration"] "," vals["type"]
-          }' \
-        >> "$csv"
-    local rows; rows=$(wc -l < "$csv")
-    if [[ $rows -gt 1 ]]; then
-        echo -e "  ${GREEN}✓ $((rows-1)) call log entries → call_logs.csv${ENDC}"
+    local call_data
+    call_data=$($ADB -s "$SERIAL" shell "content query --uri content://call_log/calls --projection date,number,cachedName,duration,type 2>/dev/null" 2>/dev/null | tr -d '\r')
+
+    if echo "$call_data" | grep -q "Row:"; then
+        echo "$call_data" \
+            | sed 's/Row: [0-9]* //' \
+            | sed 's/cachedName=/name=/g' \
+            | awk -F', ' '{
+                for(i=1;i<=NF;i++){
+                    split($i,kv,"="); vals[kv[1]]=kv[2]
+                }
+                print vals["date"] "," vals["number"] "," vals["name"] "," vals["duration"] "," vals["type"]
+              }' \
+            >> "$csv"
+        local rows; rows=$(wc -l < "$csv")
+        if [[ $rows -gt 1 ]]; then
+            echo -e "  ${GREEN}✓ $((rows-1)) call log entries → call_logs.csv${ENDC}"
+            success=true
+        fi
     else
-        echo -e "  ${RED}✗ Call log backup failed (blocked by ROM)${ENDC}"
+        echo -e "  ${YELLOW}⚠ Content provider blocked by ROM${ENDC}"
+    fi
+
+    # ── Method 2: Root — pull calllog.db directly ────────────
+    if ! $success; then
+        _pulse "Method 2: Root database pull"
+        local has_root=false
+        local root_test
+        root_test=$($ADB -s "$SERIAL" shell "su -c 'id' 2>/dev/null" 2>/dev/null | tr -d '\r')
+        echo "$root_test" | grep -q "uid=0" && has_root=true
+
+        if $has_root; then
+            echo -e "  ${CYAN}Root detected — pulling call log database…${ENDC}"
+            local db_paths=(
+                "/data/data/com.android.providers.contacts/databases/calllog.db"
+                "/data/user/0/com.android.providers.contacts/databases/calllog.db"
+                "/data/data/com.android.providers.contacts/databases/contacts2.db"
+            )
+            local pulled=false
+            for db_path in "${db_paths[@]}"; do
+                local exists
+                exists=$($ADB -s "$SERIAL" shell "su -c '[ -f \"$db_path\" ] && echo yes'" 2>/dev/null | tr -d '\r')
+                if [[ "$exists" == "yes" ]]; then
+                    echo -e "  ${CYAN}Found: $db_path${ENDC}"
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"$db_path\" /data/local/tmp/_calllog.db && chmod 644 /data/local/tmp/_calllog.db'" 2>/dev/null
+                    $ADB -s "$SERIAL" shell "su -c 'cp \"${db_path}-wal\" /data/local/tmp/_calllog.db-wal 2>/dev/null; cp \"${db_path}-shm\" /data/local/tmp/_calllog.db-shm 2>/dev/null; chmod 644 /data/local/tmp/_calllog.db-* 2>/dev/null'" 2>/dev/null
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_calllog.db" "$BACKUP_DIR/calllog.db" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_calllog.db-wal" "$BACKUP_DIR/calllog.db-wal" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_calllog.db-shm" "$BACKUP_DIR/calllog.db-shm" >/dev/null 2>&1
+                    $ADB -s "$SERIAL" shell "su -c 'rm -f /data/local/tmp/_calllog.db*'" 2>/dev/null
+                    if [[ -f "$BACKUP_DIR/calllog.db" && -s "$BACKUP_DIR/calllog.db" ]]; then
+                        echo -e "  ${GREEN}✓ Call log database pulled (${MAGENTA}$(_sz "$BACKUP_DIR/calllog.db")${GREEN}) → calllog.db${ENDC}"
+                        # Extract to CSV if sqlite3 available
+                        if command -v sqlite3 &>/dev/null; then
+                            echo -e "  ${CYAN}Extracting CSV from database…${ENDC}"
+                            local table_name="calls"
+                            # Check if table exists (calllog.db vs contacts2.db)
+                            sqlite3 "$BACKUP_DIR/calllog.db" ".tables" 2>/dev/null | grep -q "calls" || table_name="calls"
+                            sqlite3 -header -csv "$BACKUP_DIR/calllog.db" \
+                                "SELECT date, number, name, duration, type FROM $table_name ORDER BY date DESC;" \
+                                > "$csv" 2>/dev/null
+                            local db_rows; db_rows=$(wc -l < "$csv" 2>/dev/null || echo 0)
+                            [[ $db_rows -gt 1 ]] && echo -e "  ${GREEN}✓ $((db_rows-1)) call entries extracted → call_logs.csv${ENDC}"
+                        fi
+                        success=true; pulled=true
+                    fi
+                    break
+                fi
+            done
+            if ! $pulled; then
+                # Try alternative: dump via su + content query with root
+                echo -e "  ${YELLOW}DB not at standard paths — trying root content query…${ENDC}"
+                echo "date,number,name,duration_sec,type" > "$csv"
+                local root_calls
+                root_calls=$($ADB -s "$SERIAL" shell "su -c 'content query --uri content://call_log/calls --projection date,number,cachedName,duration,type'" 2>/dev/null | tr -d '\r')
+                if echo "$root_calls" | grep -q "Row:"; then
+                    echo "$root_calls" \
+                        | sed 's/Row: [0-9]* //' \
+                        | sed 's/cachedName=/name=/g' \
+                        | awk -F', ' '{
+                            for(i=1;i<=NF;i++){
+                                split($i,kv,"="); vals[kv[1]]=kv[2]
+                            }
+                            print vals["date"] "," vals["number"] "," vals["name"] "," vals["duration"] "," vals["type"]
+                          }' \
+                        >> "$csv"
+                    local r_rows; r_rows=$(wc -l < "$csv")
+                    if [[ $r_rows -gt 1 ]]; then
+                        echo -e "  ${GREEN}✓ $((r_rows-1)) call log entries (via root) → call_logs.csv${ENDC}"
+                        success=true
+                    fi
+                fi
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ No root access — cannot pull database${ENDC}"
+        fi
+    fi
+
+    # ── Method 3: adb backup fallback ────────────────────────
+    if ! $success; then
+        _pulse "Method 3: ADB backup (legacy)"
+        local out="$BACKUP_DIR/call_logs.ab"
+        echo -e "  ${YELLOW}Accept the backup prompt on your device screen${ENDC}"
+        $ADB -s "$SERIAL" backup -noapk -noshared com.android.providers.contacts -f "$out" &>/dev/null &
+        local pid=$!
+        _spin $pid "Backing up Call Logs via adb backup…"
+        wait $pid
+        if [[ -f "$out" && -s "$out" ]]; then
+            echo -e "  ${GREEN}✓ Call log backup (${MAGENTA}$(_sz "$out")${GREEN}) → call_logs.ab${ENDC}"
+            success=true
+        fi
+    fi
+
+    if ! $success; then
+        echo -e "  ${RED}✗ All call log backup methods failed${ENDC}"
+        echo -e "  ${YELLOW}  Your ROM (Android 14+) may restrict call log access.${ENDC}"
+        echo -e "  ${YELLOW}  Workaround: Use a call log export app or grant shell${ENDC}"
+        echo -e "  ${YELLOW}  READ_CALL_LOG permission: adb shell pm grant com.android.shell android.permission.READ_CALL_LOG${ENDC}"
+        rm -f "$csv" 2>/dev/null
     fi
 }
 
@@ -3481,6 +4500,8 @@ backup_media() {
     _bsec "Media Files (Photos, Videos, Audio, Documents)"
     local media_dir="$BACKUP_DIR/media"
     mkdir -p "$media_dir"
+
+    _pulse "Scanning device storage paths"
 
     # Paths to pull
     local paths=(
@@ -3533,7 +4554,7 @@ backup_apps() {
     local apk_dir="$BACKUP_DIR/apks"
     mkdir -p "$apk_dir"
 
-    echo -e "  ${YELLOW}Fetching installed third-party packages…${ENDC}"
+    _pulse "Fetching installed third-party packages"
     local packages
     packages=$($ADB -s "$SERIAL" shell pm list packages -3 2>/dev/null | sed 's/package://' | tr -d '\r')
 
@@ -3652,7 +4673,15 @@ full_backup_menu() {
 
         case $bk_choice in
             1)
-                echo -e "\n${BOLD}${CYAN}Starting Full Device Backup…${ENDC}"
+                echo ""
+                echo -e "${BOLD}${CYAN}"
+                local backup_steps=("Initializing backup engine" "Scanning device capabilities" "Detecting root access" "Starting backup")
+                for step in "${backup_steps[@]}"; do
+                    printf "\r  ⟫ %s…  " "$step"
+                    sleep 0.3
+                done
+                echo -e "${ENDC}"
+                echo -e "\n${BOLD}${CYAN}━━━━━━━━ Starting Full Device Backup ━━━━━━━━${ENDC}"
                 echo -e "${YELLOW}Keep the device unlocked and accept any prompts on screen.${ENDC}\n"
                 backup_sms
                 backup_contacts
