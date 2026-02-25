@@ -1115,6 +1115,10 @@ samsung_flash_firmware() {
     echo -e "${BOLD}${MAGENTA}SAMSUNG FIRMWARE FLASH (Odin4)${ENDC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
     
+    # ── Pre-flash backup check ───────────────────────────────
+    pre_flash_backup_check || return
+    # ────────────────────────────────────────────────────────
+
     if [[ $ODIN4_INSTALLED == false ]]; then
         echo -e "${RED}Odin4 not installed${ENDC}"
         read -p "Press Enter..."
@@ -1196,6 +1200,7 @@ samsung_flash_single() {
     clear_screen
     echo -e "${BOLD}${MAGENTA}FLASH SINGLE PARTITION${ENDC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    pre_flash_backup_check || return
     
     echo "Select partition type:"
     echo "1. BL (Bootloader)"
@@ -1233,6 +1238,7 @@ samsung_flash_heimdall() {
     clear_screen
     echo -e "${BOLD}${MAGENTA}FLASH WITH HEIMDALL${ENDC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    pre_flash_backup_check || return
     
     if [[ $HEIMDALL_INSTALLED == false ]]; then
         echo -e "${RED}Heimdall not installed${ENDC}"
@@ -1450,6 +1456,1477 @@ display_device_info() {
     read -p "Press Enter to continue..."
 }
 
+# ============================================================
+#  PUSH APK AS SYSTEM APP  (tinkerer feature)
+#  Requires root (su) — tested with Magisk / KernelSU
+#  Includes: auto-permissions, privapp XML, APK signing
+# ============================================================
+
+# ── Root helpers ─────────────────────────────────────────────
+_check_root() {
+    local t
+    t=$($ADB -s "$SERIAL" shell "su -c 'id' 2>/dev/null" | tr -d '\r')
+    echo "$t" | grep -q "uid=0" && return 0
+    t=$($ADB -s "$SERIAL" shell "id" 2>/dev/null | tr -d '\r')
+    echo "$t" | grep -q "uid=0" && return 0
+    return 1
+}
+
+# Run a command as root — wraps args in single-quoted su -c call
+_su() { $ADB -s "$SERIAL" shell "su -c '$*' 2>/dev/null" 2>/dev/null | tr -d '\r'; }
+
+_system_writable() {
+    [[ "$(_su "touch /system/.droidb_test && rm /system/.droidb_test && echo yes")" == "yes" ]]
+}
+
+_remount_rw() {
+    echo -e "  ${YELLOW}Remounting /system read-write…${ENDC}"
+    _su "magisk --mount-master" 2>/dev/null
+    _su "mount -o rw,remount /system" 2>/dev/null
+    _su "mount -o remount,rw \$(mount | grep ' /system ' | awk '{print \$1}') /system" 2>/dev/null
+    if _system_writable; then
+        echo -e "  ${GREEN}✓ /system is now writable${ENDC}"; return 0
+    else
+        echo -e "  ${RED}✗ Could not remount /system rw — try Magisk OverlayFS or a custom recovery${ENDC}"
+        return 1
+    fi
+}
+
+_remount_ro() {
+    _su "mount -o ro,remount /system" 2>/dev/null
+    echo -e "  ${CYAN}↩ /system remounted read-only${ENDC}"
+}
+
+# ── APK helpers ───────────────────────────────────────────────
+_pick_system_dir() {
+    echo ""
+    echo -e "  ${BOLD}Target directory on device:${ENDC}"
+    echo "    1. /system/app          — standard system app"
+    echo "    2. /system/priv-app     — privileged (signature-level perms, PM-protected)"
+    echo "    3. /system/product/app  — product partition"
+    echo "    4. Custom path"
+    read -rp "  Choice [1-4, default=2]: " dir_choice
+    case "${dir_choice:-2}" in
+        1) SYS_TARGET="/system/app" ;;
+        2) SYS_TARGET="/system/priv-app" ;;
+        3) SYS_TARGET="/system/product/app" ;;
+        4) read -rp "  Custom path: " SYS_TARGET ;;
+        *) SYS_TARGET="/system/priv-app" ;;
+    esac
+    echo -e "  ${CYAN}Target: $SYS_TARGET${ENDC}"
+}
+
+_get_pkg_name() {
+    local apk="$1" pkg=""
+    if command -v aapt &>/dev/null; then
+        pkg=$(aapt dump badging "$apk" 2>/dev/null | grep "^package:" | grep -oP "name='\K[^']+")
+    elif command -v aapt2 &>/dev/null; then
+        pkg=$(aapt2 dump badging "$apk" 2>/dev/null | grep "^package:" | grep -oP "name='\K[^']+")
+    fi
+    # Fallback: parse AndroidManifest.xml directly from the zip
+    if [[ -z "$pkg" ]]; then
+        pkg=$(unzip -p "$apk" AndroidManifest.xml 2>/dev/null \
+            | strings | grep -oP 'com\.[a-zA-Z0-9._]+' | head -1)
+    fi
+    [[ -z "$pkg" ]] && pkg=$(basename "$apk" .apk)
+    echo "$pkg"
+}
+
+_validate_apk() {
+    local apk="$1"
+    if ! unzip -l "$apk" 2>/dev/null | grep -q "META-INF/"; then
+        echo -e "  ${RED}✗ Not a valid signed APK (no META-INF)${ENDC}"; return 1
+    fi
+    return 0
+}
+
+# Extract all uses-permission entries declared in the APK
+_get_apk_declared_perms() {
+    local apk="$1"
+    if command -v aapt &>/dev/null; then
+        aapt dump permissions "$apk" 2>/dev/null \
+            | grep "uses-permission:" \
+            | grep -oP "name='\K[^']+"
+    elif command -v aapt2 &>/dev/null; then
+        aapt2 dump permissions "$apk" 2>/dev/null \
+            | grep "uses-permission:" \
+            | grep -oP "name='\K[^']+"
+    else
+        # Fallback: pull strings from manifest (less accurate but works without aapt)
+        unzip -p "$apk" AndroidManifest.xml 2>/dev/null \
+            | strings \
+            | grep -E "android\.permission\.[A-Z_]+" \
+            | sort -u
+    fi
+}
+
+# ── Permission system ─────────────────────────────────────────
+
+# All dangerous / sensitive permission groups
+declare -A _PERM_GROUPS=(
+    [location]="android.permission.ACCESS_FINE_LOCATION android.permission.ACCESS_COARSE_LOCATION android.permission.ACCESS_BACKGROUND_LOCATION"
+    [contacts]="android.permission.READ_CONTACTS android.permission.WRITE_CONTACTS android.permission.GET_ACCOUNTS"
+    [camera]="android.permission.CAMERA"
+    [microphone]="android.permission.RECORD_AUDIO"
+    [storage]="android.permission.READ_EXTERNAL_STORAGE android.permission.WRITE_EXTERNAL_STORAGE android.permission.MANAGE_EXTERNAL_STORAGE android.permission.READ_MEDIA_IMAGES android.permission.READ_MEDIA_VIDEO android.permission.READ_MEDIA_AUDIO"
+    [phone]="android.permission.READ_PHONE_STATE android.permission.CALL_PHONE android.permission.READ_CALL_LOG android.permission.WRITE_CALL_LOG android.permission.ADD_VOICEMAIL android.permission.USE_SIP"
+    [sms]="android.permission.SEND_SMS android.permission.RECEIVE_SMS android.permission.READ_SMS android.permission.RECEIVE_WAP_PUSH android.permission.RECEIVE_MMS"
+    [calendar]="android.permission.READ_CALENDAR android.permission.WRITE_CALENDAR"
+    [sensors]="android.permission.BODY_SENSORS android.permission.ACTIVITY_RECOGNITION"
+    [bluetooth]="android.permission.BLUETOOTH_SCAN android.permission.BLUETOOTH_CONNECT android.permission.BLUETOOTH_ADVERTISE"
+    [notifications]="android.permission.POST_NOTIFICATIONS"
+    [system_alert]="android.permission.SYSTEM_ALERT_WINDOW"
+    [install_packages]="android.permission.REQUEST_INSTALL_PACKAGES android.permission.INSTALL_PACKAGES"
+    [device_admin]="android.permission.BIND_DEVICE_ADMIN"
+    [accessibility]="android.permission.BIND_ACCESSIBILITY_SERVICE"
+)
+
+# Preset profiles
+declare -A _PERM_PRESETS=(
+    [social]="location contacts camera microphone storage notifications"
+    [dev_root]="location contacts camera microphone storage phone sms calendar sensors bluetooth notifications system_alert install_packages"
+    [media]="camera microphone storage notifications"
+    [full]="location contacts camera microphone storage phone sms calendar sensors bluetooth notifications system_alert install_packages device_admin accessibility"
+)
+
+_permission_profile_menu() {
+    # Returns selected permissions in SELECTED_PERMS (space-separated android.permission.* list)
+    SELECTED_PERMS=""
+    local selected_groups=()
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ Permission Configuration ─────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Grant permissions without user prompts          ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo "  Select permission strategy:"
+    echo "    1. 📵  None — keep app's own declared permissions only"
+    echo "    2. 📱  Social Media preset (location, contacts, camera, mic, storage, notifications)"
+    echo "    3. 🛠  Full Dev/Root preset (all dangerous permissions)"
+    echo "    4. 🎥  Media preset (camera, mic, storage, notifications)"
+    echo "    5. 💣  GRANT ALL (every permission group — nuclear option)"
+    echo "    6. 🔧  Custom — pick groups manually"
+    echo "    7. 📋  Auto-detect from APK manifest"
+    echo ""
+    read -rp "  Choice [1-7, default=7]: " perm_choice
+
+    case "${perm_choice:-7}" in
+        1)
+            echo -e "  ${CYAN}No extra permissions will be granted.${ENDC}"
+            return 0
+            ;;
+        2) IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[social]}" ;;
+        3) IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[dev_root]}" ;;
+        4) IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[media]}" ;;
+        5) selected_groups=("${!_PERM_GROUPS[@]}") ;;
+        6)
+            echo ""
+            echo -e "  ${BOLD}Available permission groups:${ENDC}"
+            local i=1
+            local group_order=(location contacts camera microphone storage phone sms calendar sensors bluetooth notifications system_alert install_packages device_admin accessibility)
+            for g in "${group_order[@]}"; do
+                printf "    %2d. %-20s  %s\n" "$i" "$g" "$(echo "${_PERM_GROUPS[$g]}" | awk '{print $1}')"
+                i=$((i+1))
+            done
+            echo ""
+            read -rp "  Enter numbers separated by spaces (e.g. 1 3 4): " group_nums
+            for n in $group_nums; do
+                local idx=$((n-1))
+                [[ $idx -ge 0 && $idx -lt ${#group_order[@]} ]] && selected_groups+=("${group_order[$idx]}")
+            done
+            ;;
+        7)
+            echo -e "  ${CYAN}Reading APK manifest permissions…${ENDC}"
+            local declared_perms
+            declared_perms=$(_get_apk_declared_perms "$_SIGNING_APK_PATH")
+            if [[ -z "$declared_perms" ]]; then
+                echo -e "  ${YELLOW}⚠ No permissions found in manifest (aapt not available or none declared).${ENDC}"
+                echo -e "  ${YELLOW}  Falling back to Social Media preset.${ENDC}"
+                IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[social]}"
+            else
+                echo -e "  ${GREEN}Found declared permissions:${ENDC}"
+                echo "$declared_perms" | while IFS= read -r p; do
+                    echo -e "    ${CYAN}+${ENDC} $p"
+                done
+                # Convert declared perms directly — no group mapping needed
+                SELECTED_PERMS="$declared_perms"
+                echo -e "  ${GREEN}✓ Will auto-grant all ${MAGENTA}$(echo "$declared_perms" | wc -l)${GREEN} declared permissions${ENDC}"
+                return 0
+            fi
+            ;;
+        *)
+            echo -e "  ${YELLOW}Invalid choice, using Social Media preset.${ENDC}"
+            IFS=' ' read -ra selected_groups <<< "${_PERM_PRESETS[social]}"
+            ;;
+    esac
+
+    # Expand groups into individual permissions
+    local perm_list=""
+    for grp in "${selected_groups[@]}"; do
+        if [[ -n "${_PERM_GROUPS[$grp]:-}" ]]; then
+            perm_list="$perm_list ${_PERM_GROUPS[$grp]}"
+        fi
+    done
+    SELECTED_PERMS=$(echo "$perm_list" | tr ' ' '\n' | sort -u | grep -v '^$')
+
+    local cnt; cnt=$(echo "$SELECTED_PERMS" | grep -c "android\." || true)
+    echo -e "  ${GREEN}✓ ${MAGENTA}$cnt${GREEN} permissions selected across groups: ${CYAN}${selected_groups[*]}${ENDC}"
+}
+
+# Grant all SELECTED_PERMS to a package via pm grant (root)
+_grant_permissions() {
+    local pkg="$1"
+    [[ -z "$SELECTED_PERMS" ]] && return 0
+
+    echo -e "\n  ${BOLD}${CYAN}Granting permissions to $pkg…${ENDC}"
+    local granted=0 failed=0
+
+    while IFS= read -r perm; do
+        [[ -z "$perm" ]] && continue
+        local result
+        result=$(_su "pm grant '$pkg' '$perm' 2>&1")
+        if [[ -z "$result" || "$result" == *"Exception"* ]]; then
+            # Some perms fail silently on success; try to verify
+            local check
+            check=$(_su "dumpsys package '$pkg' 2>/dev/null | grep '$perm' | grep 'granted=true'")
+            if [[ -n "$check" ]]; then
+                printf "  ${GREEN}✓${ENDC} %-60s\n" "$perm"
+                granted=$((granted+1))
+            else
+                printf "  ${YELLOW}~${ENDC} %-55s (install-time or not declared)\n" "$perm"
+                failed=$((failed+1))
+            fi
+        else
+            printf "  ${GREEN}✓${ENDC} %-60s\n" "$perm"
+            granted=$((granted+1))
+        fi
+    done <<< "$SELECTED_PERMS"
+
+    echo -e "\n  ${BOLD}Permissions granted: ${GREEN}$granted${ENDC}  Not applicable: ${YELLOW}$failed${ENDC}"
+}
+
+# Write /system/etc/permissions/<pkg>.xml for priv-app permission whitelist
+_write_privapp_permissions_xml() {
+    local pkg="$1"
+    [[ -z "$SELECTED_PERMS" ]] && return 0
+    [[ "$SYS_TARGET" != *"priv-app"* ]] && return 0   # only needed for priv-app
+
+    local xml_path="/system/etc/permissions/privapp-permissions-${pkg}.xml"
+    echo -e "  ${CYAN}Writing privapp permissions XML → $xml_path${ENDC}"
+
+    # Build XML content
+    local xml_lines='<?xml version="1.0" encoding="utf-8"?>\n<permissions>\n'
+    xml_lines+="    <privapp-permissions package=\"${pkg}\">\n"
+    while IFS= read -r perm; do
+        [[ -z "$perm" ]] && continue
+        xml_lines+="        <permission name=\"${perm}\"/>\n"
+    done <<< "$SELECTED_PERMS"
+    xml_lines+='    </privapp-permissions>\n</permissions>'
+
+    # Write via tmp
+    printf '%b' "$xml_lines" > "/tmp/privapp-${pkg}.xml"
+    $ADB -s "$SERIAL" push "/tmp/privapp-${pkg}.xml" "/data/local/tmp/privapp-${pkg}.xml" >/dev/null 2>&1
+    _su "cp /data/local/tmp/privapp-${pkg}.xml '$xml_path'"
+    _su "chown root:root '$xml_path'"
+    _su "chmod 644 '$xml_path'"
+    _su "chcon u:object_r:system_file:s0 '$xml_path'" 2>/dev/null
+    rm -f "/tmp/privapp-${pkg}.xml"
+    _su "rm /data/local/tmp/privapp-${pkg}.xml"
+
+    local check; check=$(_su "[ -f '$xml_path' ] && echo ok")
+    if [[ "$check" == "ok" ]]; then
+        echo -e "  ${GREEN}✓ privapp-permissions XML written${ENDC}"
+    else
+        echo -e "  ${YELLOW}⚠ privapp XML write failed (non-fatal — perms may still work)${ENDC}"
+    fi
+}
+
+# Grant Magisk/KernelSU root access to a package
+_grant_root_to_app() {
+    local pkg="$1"
+    echo -e "  ${CYAN}Attempting to grant root access to $pkg…${ENDC}"
+
+    # Detect Magisk
+    local magisk_db="/data/data/com.topjohnwu.magisk/databases/magisk.db"
+    local magisk_db_alt="/data/user/0/com.topjohnwu.magisk/databases/magisk.db"
+    local db_path=""
+
+    for db in "$magisk_db" "$magisk_db_alt"; do
+        if [[ "$(_su "[ -f '$db' ] && echo yes")" == "yes" ]]; then
+            db_path="$db"; break
+        fi
+    done
+
+    if [[ -n "$db_path" ]]; then
+        # uid from pm: get uid of package
+        local uid
+        uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
+        if [[ -n "$uid" ]]; then
+            _su "sqlite3 '$db_path' \"INSERT OR REPLACE INTO policies (uid,package_name,policy,until,logging,notification) VALUES($uid,'$pkg',2,0,1,1);\""
+            echo -e "  ${GREEN}✓ Magisk root policy set for $pkg (uid=$uid)${ENDC}"
+        else
+            echo -e "  ${YELLOW}⚠ Could not determine UID — grant manually in Magisk app${ENDC}"
+        fi
+        return
+    fi
+
+    # Detect KernelSU
+    local ksu_db="/data/data/me.weishu.kernelsu/databases/permission.db"
+    if [[ "$(_su "[ -f '$ksu_db' ] && echo yes")" == "yes" ]]; then
+        local uid
+        uid=$(_su "dumpsys package '$pkg' 2>/dev/null | grep 'userId=' | head -1 | grep -oE '[0-9]+'")
+        if [[ -n "$uid" ]]; then
+            _su "sqlite3 '$ksu_db' \"INSERT OR REPLACE INTO uid_policy (uid, allow_su, profile_id) VALUES($uid, 1, 0);\""
+            echo -e "  ${GREEN}✓ KernelSU root policy set for $pkg (uid=$uid)${ENDC}"
+        else
+            echo -e "  ${YELLOW}⚠ Could not determine UID — grant manually in KernelSU app${ENDC}"
+        fi
+        return
+    fi
+
+    echo -e "  ${YELLOW}⚠ No Magisk or KernelSU database found — root grant skipped${ENDC}"
+    echo -e "  ${YELLOW}  Grant root manually from your superuser manager after reboot${ENDC}"
+}
+
+# ── Signing system ────────────────────────────────────────────
+DROIDB_KEYSTORE_DIR="$HOME/.droidb/keystores"
+
+# Ensure apksigner / jarsigner / keytool are available
+_check_signing_tools() {
+    local missing=()
+    command -v keytool    &>/dev/null || missing+=("keytool (Java JDK)")
+    command -v apksigner  &>/dev/null || \
+        command -v jarsigner &>/dev/null || missing+=("apksigner or jarsigner")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "  ${YELLOW}⚠ Missing signing tools: ${missing[*]}${ENDC}"
+        echo -e "  ${YELLOW}  Install with: sudo apt install default-jdk apksigner${ENDC}"
+        return 1
+    fi
+    return 0
+}
+
+# Generate (or reuse) a persistent test keystore for a project/app
+_get_or_create_keystore() {
+    local pkg="$1"
+    local ks_dir="$DROIDB_KEYSTORE_DIR/$pkg"
+    local ks_file="$ks_dir/keystore.jks"
+    local ks_pass="droidb_test_$(echo "$pkg" | md5sum | cut -c1-8)"
+    local ks_alias="app_key"
+
+    mkdir -p "$ks_dir"
+
+    if [[ -f "$ks_file" ]]; then
+        echo -e "  ${GREEN}✓ Reusing existing keystore: $ks_file${ENDC}"
+    else
+        echo -e "  ${CYAN}Generating new test keystore for $pkg…${ENDC}"
+        keytool -genkeypair \
+            -keystore "$ks_file" \
+            -alias "$ks_alias" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 9125 \
+            -storepass "$ks_pass" \
+            -keypass  "$ks_pass" \
+            -dname "CN=$pkg, OU=droidB-tinkerer, O=droidB, L=Local, ST=Dev, C=US" \
+            2>/dev/null \
+            && echo -e "  ${GREEN}✓ Keystore created: $ks_file${ENDC}" \
+            || { echo -e "  ${RED}✗ keytool failed — Java JDK required${ENDC}"; return 1; }
+    fi
+
+    KS_FILE="$ks_file"
+    KS_PASS="$ks_pass"
+    KS_ALIAS="$ks_alias"
+}
+
+# Sign APK with auto-generated test key
+_sign_apk_test_key() {
+    local apk_in="$1"     # original APK
+    local apk_out="$2"    # signed output
+    local pkg="$3"
+
+    _get_or_create_keystore "$pkg" || return 1
+
+    # Remove existing signature (zipalign-safe copy first)
+    local unsigned="${apk_out%.apk}-unsigned.apk"
+    cp "$apk_in" "$unsigned"
+
+    echo -e "  ${CYAN}Signing APK with test key…${ENDC}"
+    if command -v apksigner &>/dev/null; then
+        apksigner sign \
+            --ks "$KS_FILE" \
+            --ks-pass "pass:$KS_PASS" \
+            --ks-key-alias "$KS_ALIAS" \
+            --out "$apk_out" \
+            "$unsigned" 2>&1 | grep -v "^$" | sed 's/^/    /'
+        local rc=${PIPESTATUS[0]}
+    else
+        # Fallback to jarsigner
+        cp "$unsigned" "$apk_out"
+        jarsigner \
+            -keystore "$KS_FILE" \
+            -storepass "$KS_PASS" \
+            -keypass  "$KS_PASS" \
+            "$apk_out" "$KS_ALIAS" 2>&1 | grep -v "^$" | sed 's/^/    /'
+        local rc=${PIPESTATUS[0]}
+    fi
+
+    rm -f "$unsigned"
+
+    if [[ $rc -eq 0 && -f "$apk_out" ]]; then
+        echo -e "  ${GREEN}✓ APK signed → $(basename "$apk_out")${ENDC}"
+        echo -e "  ${CYAN}  Keystore: $KS_FILE${ENDC}"
+        echo -e "  ${CYAN}  This key is PERSISTENT — all future builds of $pkg signed"
+        echo -e "  ${CYAN}  with this keystore will be treated as the same app.${ENDC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ Signing failed — using original unsigned APK${ENDC}"
+        return 1
+    fi
+}
+
+# Try to extract platform key from device (advanced — needs full root)
+_extract_platform_key() {
+    local out_dir="$DROIDB_KEYSTORE_DIR/platform_keys_${SERIAL}"
+    mkdir -p "$out_dir"
+
+    echo -e "  ${CYAN}Attempting to pull platform signing keys from device…${ENDC}"
+    echo -e "  ${YELLOW}  This requires full root and is device-specific.${ENDC}"
+
+    # Common platform key locations
+    local key_paths=(
+        "/system/framework/framework-res.apk"
+        "/apex/com.android.runtime/etc/security/cacerts"
+        "/data/misc/keystore"
+    )
+
+    # Pull framework-res.apk and extract its signing cert
+    local fw_res="/tmp/droidb_fw_res_${SERIAL}.apk"
+    $ADB -s "$SERIAL" pull "/system/framework/framework-res.apk" "$fw_res" >/dev/null 2>&1
+
+    if [[ -f "$fw_res" ]]; then
+        if command -v apksigner &>/dev/null; then
+            apksigner verify --print-certs "$fw_res" 2>/dev/null \
+                > "$out_dir/platform_cert_info.txt"
+            echo -e "  ${GREEN}✓ Platform cert info saved → $out_dir/platform_cert_info.txt${ENDC}"
+            echo -e "  ${YELLOW}  Note: Signing with the actual platform private key requires"
+            echo -e "         AOSP build environment or extracted pk8 keys.${ENDC}"
+            echo -e "  ${YELLOW}  For most tinkering purposes, the test keystore is sufficient."
+            echo -e "         The platform cert is shown above for reference only.${ENDC}"
+        fi
+        rm -f "$fw_res"
+    else
+        echo -e "  ${YELLOW}⚠ Could not pull framework-res.apk — platform key extraction skipped${ENDC}"
+    fi
+
+    echo -e "  ${CYAN}Falling back to test keystore for signing.${ENDC}"
+    return 1  # Signal: use test key instead
+}
+
+# ── Signing menu ──────────────────────────────────────────────
+# ============================================================
+#  CLONE SIGNATURE FROM SYSTEM APP
+#  Extracts X.509 cert from any on-device APK, identifies if the
+#  private key is publicly known (AOSP/LineageOS testkeys), builds
+#  a usable keystore, and guides pk8+pem import for devs with
+#  AOSP build access.  Correctly explains private-key limits for
+#  OEM production keys.
+# ============================================================
+
+# Identify cert origin from a local APK file
+_identify_cert_origin() {
+    local apk="$1"
+    CERT_IDENTITY=""
+    CERT_SUBJECT=""
+    CERT_SHA256=""
+    CERT_IS_KNOWN_PUBLIC=false
+    CERT_ROM_TYPE=""
+
+    # Extract cert text via apksigner, then openssl, then keytool
+    local cert_text=""
+    if command -v apksigner &>/dev/null; then
+        cert_text=$(apksigner verify --print-certs "$apk" 2>/dev/null)
+    fi
+    if [[ -z "$cert_text" ]] && command -v openssl &>/dev/null; then
+        local sig_file
+        sig_file=$(unzip -l "$apk" 2>/dev/null \
+            | grep -E "META-INF/.*\.(RSA|DSA|EC)$" \
+            | awk '{print $NF}' | head -1)
+        if [[ -n "$sig_file" ]]; then
+            local tmp_pem="/tmp/droidb_certid_$$.pem"
+            unzip -p "$apk" "$sig_file" 2>/dev/null \
+                | openssl pkcs7 -inform DER -noout -print_certs \
+                    -out "$tmp_pem" 2>/dev/null
+            [[ -s "$tmp_pem" ]] && \
+                cert_text=$(openssl x509 -in "$tmp_pem" -noout \
+                    -subject -issuer -dates -fingerprint -sha256 2>/dev/null)
+            rm -f "$tmp_pem"
+        fi
+    fi
+    if [[ -z "$cert_text" ]] && command -v keytool &>/dev/null; then
+        cert_text=$(keytool -printcert -jarfile "$apk" 2>/dev/null)
+    fi
+
+    # Pull fields
+    CERT_SHA256=$(echo "$cert_text" \
+        | grep -iE "sha.?256|SHA-256" \
+        | grep -oE "[0-9A-Fa-f:]{95}" | head -1)
+    CERT_SUBJECT=$(echo "$cert_text" \
+        | grep -i "subject" | head -1 \
+        | sed 's/.*[Ss]ubject[: =]*//')
+
+    local SUB_UP; SUB_UP=$(echo "$CERT_SUBJECT" | tr '[:lower:]' '[:upper:]')
+
+    if echo "$SUB_UP" | grep -qE "ANDROID DEBUG"; then
+        CERT_IDENTITY="AOSP Debug/Test Key"
+        CERT_IS_KNOWN_PUBLIC=true; CERT_ROM_TYPE="aosp_testkey"
+    elif echo "$SUB_UP" | grep -qE "ANDROID PLATFORM|CN=ANDROID,O=ANDROID"; then
+        CERT_IDENTITY="AOSP Platform Key"
+        CERT_IS_KNOWN_PUBLIC=true; CERT_ROM_TYPE="aosp_platform"
+    elif echo "$SUB_UP" | grep -qE "LINEAGEOS|CYANOGENMOD"; then
+        CERT_IDENTITY="LineageOS/CyanogenMod Test Key"
+        CERT_IS_KNOWN_PUBLIC=true; CERT_ROM_TYPE="lineage"
+    elif echo "$SUB_UP" | grep -qE "CALYXOS"; then
+        CERT_IDENTITY="CalyxOS Test Key"
+        CERT_IS_KNOWN_PUBLIC=true; CERT_ROM_TYPE="calyx"
+    elif echo "$SUB_UP" | grep -qE "GRAPHENEOS"; then
+        CERT_IDENTITY="GrapheneOS Test Key"
+        CERT_IS_KNOWN_PUBLIC=true; CERT_ROM_TYPE="graphene"
+    elif echo "$SUB_UP" | grep -qE "SAMSUNG|GOOGLE LLC|GOOGLE INC|HUAWEI|XIAOMI|OPPO|ONEPLUS|MOTOROLA|SONY|LG ELECTRONICS"; then
+        local oem_name; oem_name=$(echo "$CERT_SUBJECT" \
+            | grep -oiE "samsung|google|huawei|xiaomi|oppo|oneplus|motorola|sony|lg" \
+            | head -1 | tr '[:lower:]' '[:upper:]')
+        CERT_IDENTITY="OEM Production Key (${oem_name})"
+        CERT_IS_KNOWN_PUBLIC=false; CERT_ROM_TYPE="oem"
+    else
+        CERT_IDENTITY="Unknown / Custom Key"
+        CERT_IS_KNOWN_PUBLIC=false; CERT_ROM_TYPE="unknown"
+    fi
+}
+
+# Convert pk8 (DER private key) + x509 PEM cert into a JKS keystore
+_pk8_pem_to_keystore() {
+    local pk8_file="$1" pem_file="$2" out_ks="$3"
+    local ks_pass="$4" ks_alias="${5:-imported_key}"
+    local tmp_pkey="/tmp/droidb_pkey_$$.pem"
+    local tmp_p12="/tmp/droidb_p12_$$.p12"
+
+    echo -e "  ${CYAN}Converting pk8 DER → PEM private key…${ENDC}"
+    if ! openssl pkcs8 -in "$pk8_file" -inform DER -nocrypt \
+            -out "$tmp_pkey" 2>/dev/null; then
+        echo -e "  ${RED}✗ pk8 conversion failed — must be unencrypted DER format${ENDC}"
+        rm -f "$tmp_pkey"; return 1
+    fi
+
+    echo -e "  ${CYAN}Packing cert + key into PKCS12…${ENDC}"
+    if ! openssl pkcs12 -export \
+            -in "$pem_file" -inkey "$tmp_pkey" \
+            -out "$tmp_p12" -name "$ks_alias" \
+            -passout "pass:$ks_pass" 2>/dev/null; then
+        echo -e "  ${RED}✗ PKCS12 export failed — cert/key pair may not match${ENDC}"
+        rm -f "$tmp_pkey" "$tmp_p12"; return 1
+    fi
+
+    echo -e "  ${CYAN}Importing PKCS12 into JKS keystore…${ENDC}"
+    keytool -importkeystore \
+        -srckeystore  "$tmp_p12"  -srcstoretype  PKCS12 \
+        -srcstorepass "$ks_pass" \
+        -destkeystore "$out_ks"  -deststoretype JKS \
+        -deststorepass "$ks_pass" -destkeypass "$ks_pass" \
+        -alias "$ks_alias" -noprompt 2>/dev/null
+
+    rm -f "$tmp_pkey" "$tmp_p12"
+
+    if [[ -f "$out_ks" && -s "$out_ks" ]]; then
+        KS_FILE="$out_ks"; KS_PASS="$ks_pass"; KS_ALIAS="$ks_alias"
+        echo -e "  ${GREEN}✓ Keystore created: $out_ks${ENDC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ Keystore creation failed${ENDC}"; return 1
+    fi
+}
+
+# pk8 + pem import wizard — called when user has AOSP build tree access
+_import_pk8_pem_workflow() {
+    local pkg="$1"
+    CLONED_KS_FILE=""
+
+    echo ""
+    echo -e "  ${BOLD}pk8 + x509.pem import wizard${ENDC}"
+    echo -e "  ${CYAN}Provide the private key and cert from your AOSP/ROM build tree.${ENDC}"
+    echo -e "  ${CYAN}  Typical AOSP paths:${ENDC}"
+    echo -e "  ${CYAN}    build/target/product/security/testkey.pk8${ENDC}"
+    echo -e "  ${CYAN}    build/target/product/security/testkey.x509.pem${ENDC}"
+    echo ""
+
+    for tool in openssl keytool; do
+        if ! command -v "$tool" &>/dev/null; then
+            echo -e "  ${RED}✗ $tool not found${ENDC}"
+            echo -e "  ${YELLOW}  Install: sudo apt install openssl default-jdk${ENDC}"
+            return 1
+        fi
+    done
+
+    echo -e "  ${YELLOW}Drag & drop pk8 file (private key):${ENDC}"
+    read -rp "  pk8 path: " pk8_raw
+    local pk8; pk8=$(process_path "$pk8_raw")
+    [[ ! -f "$pk8" ]] && { echo -e "  ${RED}✗ pk8 not found${ENDC}"; return 1; }
+
+    echo -e "  ${YELLOW}Drag & drop x509.pem file (certificate):${ENDC}"
+    read -rp "  pem path: " pem_raw
+    local pem; pem=$(process_path "$pem_raw")
+    [[ ! -f "$pem" ]] && { echo -e "  ${RED}✗ pem not found${ENDC}"; return 1; }
+
+    read -rp "  Key alias [default: imported_key]: " alias_in
+    local key_alias="${alias_in:-imported_key}"
+    local ks_dir="$DROIDB_KEYSTORE_DIR/imported_${pkg}"
+    mkdir -p "$ks_dir"
+    local ks_file="$ks_dir/keystore.jks"
+    local ks_pass="droidb_import_$(echo "$pkg" | md5sum | cut -c1-8)"
+
+    echo ""
+    if _pk8_pem_to_keystore "$pk8" "$pem" "$ks_file" "$ks_pass" "$key_alias"; then
+        echo -e "  ${GREEN}✓ Keystore ready — APK will have identical signature to source app${ENDC}"
+        CLONED_KS_FILE="$ks_file"
+        CLONED_KS_PASS="$ks_pass"
+        CLONED_KS_ALIAS="$key_alias"
+        return 0
+    fi
+    return 1
+}
+
+# Main clone-signature workflow
+_clone_system_app_signature() {
+    local out_pkg="$1"
+    CLONED_KS_FILE=""
+    CLONED_KS_PASS=""
+    CLONED_KS_ALIAS=""
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ Clone Signature from System App ─────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Copy an existing system app's signing identity  ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo -e "  ${YELLOW}What this does:${ENDC}"
+    echo "    Extracts the X.509 certificate from any system APK on this"
+    echo "    device, identifies whether the private key is publicly known"
+    echo "    (AOSP/LineageOS testkeys), and builds a keystore so your"
+    echo "    custom app can carry the same signature identity."
+    echo ""
+    echo -e "  ${RED}Hard technical limit:${ENDC}"
+    echo "    The private key was NEVER stored on the device — only the"
+    echo "    public certificate was.  For OEM production keys (Samsung,"
+    echo "    Google etc.) cloning the actual signing key is impossible"
+    echo "    without the vendor's HSM.  For publicly known test keys"
+    echo "    (AOSP, LineageOS) full identity cloning IS possible."
+    echo ""
+
+    # Pick source app
+    echo -e "  ${BOLD}Pick a source system app:${ENDC}"
+    echo "    1. Browse system apps on this device"
+    echo "    2. Enter package name"
+    echo "    3. Enter on-device APK path directly"
+    echo ""
+    read -rp "  Choice [1-3]: " src_choice
+
+    local SRC_APK_PATH="" SRC_PKG=""
+
+    case "${src_choice:-1}" in
+        1)
+            echo ""
+            echo -e "  ${CYAN}Fetching system app list…${ENDC}"
+            local sys_apps
+            sys_apps=$($ADB -s "$SERIAL" shell pm list packages -s 2>/dev/null \
+                | sed 's/package://' | tr -d '\r' | sort | head -50)
+            local i=1
+            declare -A _SYS_MAP
+            while IFS= read -r p; do
+                printf "  %3d. %s\n" "$i" "$p"
+                _SYS_MAP[$i]="$p"; i=$((i+1))
+            done <<< "$sys_apps"
+            echo ""
+            read -rp "  Enter number: " app_num
+            SRC_PKG="${_SYS_MAP[$app_num]:-}"
+            [[ -z "$SRC_PKG" ]] && { echo -e "  ${RED}Invalid${ENDC}"; return 1; }
+            ;;
+        2) read -rp "  Package name: " SRC_PKG ;;
+        3) read -rp "  On-device APK path: " SRC_APK_PATH ;;
+    esac
+
+    # Resolve package → path
+    if [[ -z "$SRC_APK_PATH" && -n "$SRC_PKG" ]]; then
+        SRC_APK_PATH=$(_su "pm path '$SRC_PKG' 2>/dev/null" \
+            | sed 's/package://' | tr -d '\r ')
+        [[ -z "$SRC_APK_PATH" ]] && {
+            echo -e "  ${RED}✗ Cannot find APK for: $SRC_PKG${ENDC}"; return 1; }
+    fi
+
+    echo -e "  ${CYAN}Source: $SRC_APK_PATH${ENDC}"
+
+    # Pull APK — direct first, then via root staging
+    local local_apk="/tmp/droidb_src_clone_$$.apk"
+    echo -e "  ${CYAN}Pulling APK from device…${ENDC}"
+    $ADB -s "$SERIAL" pull "$SRC_APK_PATH" "$local_apk" >/dev/null 2>&1
+    if [[ ! -s "$local_apk" ]]; then
+        echo -e "  ${YELLOW}Direct pull failed — trying root staging…${ENDC}"
+        _su "cp '$SRC_APK_PATH' /data/local/tmp/_droidb_clone.apk && chmod 644 /data/local/tmp/_droidb_clone.apk"
+        $ADB -s "$SERIAL" pull "/data/local/tmp/_droidb_clone.apk" "$local_apk" >/dev/null 2>&1
+        _su "rm /data/local/tmp/_droidb_clone.apk" 2>/dev/null
+    fi
+    if [[ ! -s "$local_apk" ]]; then
+        echo -e "  ${RED}✗ Could not pull APK — split APK or permission denied${ENDC}"
+        rm -f "$local_apk"; return 1
+    fi
+    echo -e "  ${GREEN}✓ Pulled ($(du -sh "$local_apk" | cut -f1))${ENDC}"
+
+    # Identify cert
+    echo ""
+    echo -e "  ${BOLD}Certificate analysis:${ENDC}"
+    echo -e "  ${YELLOW}$(printf '─%.0s' {1..56})${ENDC}"
+    _identify_cert_origin "$local_apk"
+
+    echo -e "  ${BOLD}Identity   :${ENDC} ${CYAN}$CERT_IDENTITY${ENDC}"
+    echo -e "  ${BOLD}Subject    :${ENDC} $CERT_SUBJECT"
+    [[ -n "$CERT_SHA256" ]] && \
+        echo -e "  ${BOLD}SHA-256    :${ENDC} ${MAGENTA}$CERT_SHA256${ENDC}"
+    if $CERT_IS_KNOWN_PUBLIC; then
+        echo -e "  ${BOLD}Private key:${ENDC} ${GREEN}PUBLICLY KNOWN — full clone possible${ENDC}"
+    else
+        echo -e "  ${BOLD}Private key:${ENDC} ${RED}UNKNOWN/OEM — metadata clone only${ENDC}"
+    fi
+    echo -e "  ${YELLOW}$(printf '─%.0s' {1..56})${ENDC}"
+
+    # Save cert PEM for user reference
+    local cert_dir="$DROIDB_KEYSTORE_DIR/extracted_certs"
+    mkdir -p "$cert_dir"
+    local cert_pem="$cert_dir/${SRC_PKG:-src}_cert.pem"
+    if command -v openssl &>/dev/null; then
+        local sf; sf=$(unzip -l "$local_apk" 2>/dev/null \
+            | grep -E "META-INF/.*\.(RSA|DSA|EC)$" | awk '{print $NF}' | head -1)
+        if [[ -n "$sf" ]]; then
+            unzip -p "$local_apk" "$sf" 2>/dev/null \
+                | openssl pkcs7 -inform DER -noout -print_certs \
+                    -out "$cert_pem" 2>/dev/null
+            [[ -s "$cert_pem" ]] && \
+                echo -e "  ${GREEN}✓ Certificate PEM saved → $cert_pem${ENDC}"
+        fi
+    fi
+
+    echo ""
+
+    # Route by key type
+    case "$CERT_ROM_TYPE" in
+
+        aosp_testkey|aosp_platform)
+            echo -e "  ${GREEN}✓ AOSP test key detected — private key is in public AOSP source.${ENDC}"
+            echo ""
+            echo "  Options:"
+            echo "    1. Generate keystore with AOSP test key metadata"
+            echo "       (new private key, matching identity — good for your own app ecosystem)"
+            echo "    2. Import EXACT private key from AOSP build tree (pk8 + pem)"
+            echo "       (identical signature — sign updates to this app or gain sharedUserId)"
+            echo "    3. Save cert info only"
+            echo ""
+            read -rp "  Choice [1-3, default=1]: " aosp_c
+            case "${aosp_c:-1}" in
+                1)
+                    local ks_dir="$DROIDB_KEYSTORE_DIR/aosp_meta_${out_pkg}"
+                    mkdir -p "$ks_dir"
+                    local ks_file="$ks_dir/keystore.jks"
+                    local ks_pass="droidb_aosp_$(echo "$out_pkg" | md5sum | cut -c1-8)"
+                    if [[ ! -f "$ks_file" ]]; then
+                        echo -e "  ${CYAN}Generating keystore with AOSP test key metadata…${ENDC}"
+                        keytool -genkeypair \
+                            -keystore "$ks_file" -alias "aosp_testkey" \
+                            -keyalg RSA -keysize 2048 -validity 9125 \
+                            -storepass "$ks_pass" -keypass "$ks_pass" \
+                            -dname "CN=Android Debug, O=Android, C=US" \
+                            2>/dev/null \
+                            && echo -e "  ${GREEN}✓ AOSP-identity keystore created${ENDC}" \
+                            || { echo -e "  ${RED}✗ keytool failed${ENDC}"; rm -f "$local_apk"; return 1; }
+                    else
+                        echo -e "  ${GREEN}✓ Reusing existing AOSP-identity keystore${ENDC}"
+                    fi
+                    echo -e "  ${YELLOW}  Note: Different private key, same CN/O metadata."
+                    echo -e "          For EXACT signature match, use option 2 with the"
+                    echo -e "          actual testkey.pk8 from AOSP source.${ENDC}"
+                    CLONED_KS_FILE="$ks_file"
+                    CLONED_KS_PASS="$ks_pass"
+                    CLONED_KS_ALIAS="aosp_testkey"
+                    ;;
+                2) _import_pk8_pem_workflow "$out_pkg"
+                   [[ -n "${CLONED_KS_FILE:-}" ]] && {
+                       CLONED_KS_FILE="${CLONED_KS_FILE}"
+                       CLONED_KS_PASS="${CLONED_KS_PASS}"
+                       CLONED_KS_ALIAS="${CLONED_KS_ALIAS}"
+                   } ;;
+                3) echo -e "  ${CYAN}Cert saved. No keystore created.${ENDC}" ;;
+            esac
+            ;;
+
+        lineage|calyx|graphene)
+            echo -e "  ${GREEN}✓ ${CERT_IDENTITY} — test keys are public in the ROM source repo.${ENDC}"
+            echo ""
+            echo "  Options:"
+            echo "    1. Import exact pk8 + pem from ROM source tree"
+            echo "    2. Generate keystore with matching name/org metadata"
+            echo "    3. Save cert info only"
+            echo ""
+            read -rp "  Choice [1-3, default=1]: " rom_c
+            case "${rom_c:-1}" in
+                1) _import_pk8_pem_workflow "$out_pkg"
+                   [[ -n "${CLONED_KS_FILE:-}" ]] && {
+                       CLONED_KS_FILE="${CLONED_KS_FILE}"
+                       CLONED_KS_PASS="${CLONED_KS_PASS}"
+                       CLONED_KS_ALIAS="${CLONED_KS_ALIAS}"
+                   } ;;
+                2)
+                    local cn_v; cn_v=$(echo "$CERT_SUBJECT" | grep -oP "CN=\K[^,]+" | head -1)
+                    local o_v;  o_v=$(echo  "$CERT_SUBJECT" | grep -oP "O=\K[^,]+"  | head -1)
+                    local ks_dir="$DROIDB_KEYSTORE_DIR/rommeta_${out_pkg}"
+                    mkdir -p "$ks_dir"
+                    local ks_file="$ks_dir/keystore.jks"
+                    local ks_pass="droidb_rom_$(echo "$out_pkg" | md5sum | cut -c1-8)"
+                    keytool -genkeypair \
+                        -keystore "$ks_file" -alias "rom_key" \
+                        -keyalg RSA -keysize 2048 -validity 9125 \
+                        -storepass "$ks_pass" -keypass "$ks_pass" \
+                        -dname "CN=${cn_v:-ROMKey}, O=${o_v:-CustomROM}, C=US" \
+                        2>/dev/null \
+                        && echo -e "  ${GREEN}✓ ROM-identity keystore created${ENDC}" \
+                        || { echo -e "  ${RED}✗ keytool failed${ENDC}"; rm -f "$local_apk"; return 1; }
+                    CLONED_KS_FILE="$ks_file"
+                    CLONED_KS_PASS="$ks_pass"
+                    CLONED_KS_ALIAS="rom_key"
+                    ;;
+                3) echo -e "  ${CYAN}Cert saved. No keystore created.${ENDC}" ;;
+            esac
+            ;;
+
+        oem|unknown)
+            echo -e "  ${RED}⚠ ${CERT_IDENTITY}${ENDC}"
+            echo "    The private key was never stored on the device and is NOT"
+            echo "    publicly available.  Exact byte-for-byte signing is impossible"
+            echo "    without the vendor's HSM or build environment."
+            echo ""
+
+            # ── Step A: scan device for any stray pk8 keys ──────────
+            echo -e "  ${CYAN}Scanning device for pk8 private keys…${ENDC}"
+            local found_pk8s
+            found_pk8s=$(_su "find /system /vendor /product /odm 2>/dev/null \
+                -name '*.pk8' -o -name 'platform.pk8' -o -name 'testkey.pk8' \
+                -o -name 'shared.pk8' -o -name 'media.pk8' \
+                2>/dev/null" | tr -d '\r' | grep -v "^$")
+            if [[ -n "$found_pk8s" ]]; then
+                echo -e "  ${GREEN}✓ pk8 key file(s) found on device:${ENDC}"
+                local i=1; declare -A _PK8_MAP
+                while IFS= read -r kpath; do
+                    echo -e "    ${CYAN}$i.${ENDC} $kpath"
+                    _PK8_MAP[$i]="$kpath"; i=$((i+1))
+                done <<< "$found_pk8s"
+                echo ""
+                read -rp "  Use a found pk8? Enter number or ENTER to skip: " pk8_pick
+                if [[ -n "$pk8_pick" && -n "${_PK8_MAP[$pk8_pick]:-}" ]]; then
+                    local dev_pk8_path="${_PK8_MAP[$pk8_pick]}"
+                    # Find companion x509.pem in same dir
+                    local pem_guess
+                    pem_guess=$(_su "ls $(dirname "$dev_pk8_path")/*.pem 2>/dev/null" \
+                        | tr -d '\r' | head -1)
+                    # Pull both to /tmp
+                    local tmp_pk8="/tmp/droidb_devkey_$$.pk8"
+                    local tmp_pem="/tmp/droidb_devcert_$$.pem"
+                    _su "cp '$dev_pk8_path' /data/local/tmp/_droidb_pk8.pk8 && chmod 644 /data/local/tmp/_droidb_pk8.pk8"
+                    $ADB -s "$SERIAL" pull "/data/local/tmp/_droidb_pk8.pk8" "$tmp_pk8" >/dev/null 2>&1
+                    _su "rm /data/local/tmp/_droidb_pk8.pk8" 2>/dev/null
+                    if [[ -n "$pem_guess" ]]; then
+                        _su "cp '$pem_guess' /data/local/tmp/_droidb_pem.pem && chmod 644 /data/local/tmp/_droidb_pem.pem"
+                        $ADB -s "$SERIAL" pull "/data/local/tmp/_droidb_pem.pem" "$tmp_pem" >/dev/null 2>&1
+                        _su "rm /data/local/tmp/_droidb_pem.pem" 2>/dev/null
+                    fi
+                    if [[ ! -s "$tmp_pem" ]]; then
+                        echo -e "  ${YELLOW}No companion .pem found — drag & drop it:${ENDC}"
+                        read -rp "  x509.pem path: " pem_raw
+                        tmp_pem=$(process_path "$pem_raw")
+                    fi
+                    if [[ -s "$tmp_pk8" && -s "$tmp_pem" ]]; then
+                        local ks_dir="$DROIDB_KEYSTORE_DIR/devkey_${out_pkg}"
+                        mkdir -p "$ks_dir"
+                        local ks_file="$ks_dir/keystore.jks"
+                        local ks_pass="droidb_dev_$(echo "$out_pkg" | md5sum | cut -c1-8)"
+                        if _pk8_pem_to_keystore "$tmp_pk8" "$tmp_pem" "$ks_file" "$ks_pass" "device_key"; then
+                            CLONED_KS_FILE="$ks_file"
+                            CLONED_KS_PASS="$ks_pass"
+                            CLONED_KS_ALIAS="device_key"
+                            echo -e "  ${GREEN}✓ Keystore built from device pk8 — your app will carry the same signature${ENDC}"
+                        fi
+                    else
+                        echo -e "  ${YELLOW}Could not pull pk8/pem pair — skipping${ENDC}"
+                    fi
+                    rm -f "$tmp_pk8" "$tmp_pem" 2>/dev/null
+                fi
+            else
+                echo -e "  ${YELLOW}  No pk8 keys found on device (expected for production OEM ROMs)${ENDC}"
+            fi
+
+            # If we got a keystore from the scan, skip the menu
+            if [[ -n "${CLONED_KS_FILE:-}" ]]; then
+                rm -f "$local_apk"; return 0
+            fi
+
+            echo ""
+            echo -e "  ${BOLD}Options for OEM/unknown key:${ENDC}"
+            echo "    1. Import pk8 + pem from AOSP/ROM build tree"
+            echo "    2. 🪄 Generate Magisk signature-spoof module (recommended for OEM)"
+            echo "    3. Save cert PEM for reference only"
+            echo "    4. Back — sign with droidB test key"
+            echo ""
+            read -rp "  Choice [1-4, default=2]: " oem_c
+            case "${oem_c:-2}" in
+                1) _import_pk8_pem_workflow "$out_pkg"
+                   [[ -n "${CLONED_KS_FILE:-}" ]] && {
+                       CLONED_KS_FILE="${CLONED_KS_FILE}"
+                       CLONED_KS_PASS="${CLONED_KS_PASS}"
+                       CLONED_KS_ALIAS="${CLONED_KS_ALIAS}"
+                   } ;;
+                2) _build_sigspoof_module "$out_pkg" "$local_apk" ;;
+                3) echo -e "  ${CYAN}Cert saved → $cert_pem${ENDC}" ;;
+                4) rm -f "$local_apk"; return 1 ;;
+            esac
+            ;;
+    esac
+
+    rm -f "$local_apk"
+    return 0
+}
+
+# ── Magisk signature-spoof module builder ─────────────────────
+# Builds a Magisk module that makes PackageManager return the
+# target app's certificates for our package — no private key needed.
+_build_sigspoof_module() {
+    local pkg="$1"       # our custom app package
+    local src_apk="$2"   # local copy of source system APK (for cert extraction)
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ Magisk Signature Spoof Module ──────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Makes PM return spoofed cert for your package ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└──────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo -e "  ${YELLOW}How this works:${ENDC}"
+    echo "    The Magisk module injects a system property + a boot-time"
+    echo "    shell hook that patches PackageManager so it returns the"
+    echo "    cloned certificate fingerprint when queried for '$pkg'."
+    echo "    This fools signature-checking code (including Play Integrity"
+    echo "    at the app level) without any source APK modification."
+    echo ""
+
+    # We need the SHA-256 fingerprint of the SOURCE app's certificate
+    local src_sha256="$CERT_SHA256"
+    if [[ -z "$src_sha256" && -n "$src_apk" && -f "$src_apk" ]]; then
+        _identify_cert_origin "$src_apk"
+        src_sha256="$CERT_SHA256"
+    fi
+
+    if [[ -z "$src_sha256" ]]; then
+        echo -e "  ${YELLOW}⚠ Could not determine source cert SHA-256 fingerprint.${ENDC}"
+        read -rp "  Enter SHA-256 fingerprint manually (AA:BB:CC:… or leave blank to skip): " src_sha256
+        [[ -z "$src_sha256" ]] && { echo -e "  ${RED}Aborted.${ENDC}"; return 1; }
+    fi
+
+    echo -e "  ${CYAN}Target cert fingerprint:${ENDC}"
+    echo -e "  ${MAGENTA}$src_sha256${ENDC}"
+    echo ""
+
+    local module_build_dir="/tmp/droidb_sigspoof_${pkg//[^a-zA-Z0-9]/_}_$$"
+    local module_name="droidb_sigspoof_${pkg//[^a-zA-Z0-9]/_}"
+    local module_zip="$HOME/.droidb/modules/${module_name}.zip"
+    mkdir -p "$(dirname "$module_zip")" "$module_build_dir"
+
+    # ── module.prop ─────────────────────────────────────────
+    cat > "$module_build_dir/module.prop" <<EOF
+id=${module_name}
+name=droidB SigSpoof: ${pkg}
+version=v1.0
+versionCode=1
+author=droidB
+description=Spoofs signature of ${pkg} to match cloned system app cert. Generated by droidB.
+EOF
+
+    # ── service.sh — runs as root after Zygote starts ───────
+    # Uses pm's internal package signing database manipulation
+    # and a property to signal our patch is active.
+    mkdir -p "$module_build_dir/system/etc/droidb"
+    cat > "$module_build_dir/service.sh" <<'SVCEOF'
+#!/system/bin/sh
+# droidB SigSpoof service — applied at boot by Magisk
+MODDIR="${0%/*}"
+PKG_TARGET=$(cat "$MODDIR/system/etc/droidb/spoof_pkg" 2>/dev/null)
+CERT_SHA=$(cat "$MODDIR/system/etc/droidb/spoof_sha256" 2>/dev/null | tr ':' '\0' | xxd -p 2>/dev/null || cat "$MODDIR/system/etc/droidb/spoof_sha256")
+[ -z "$PKG_TARGET" ] && exit 0
+
+# Signal to userspace that this spoof is active
+resetprop "droidb.sigspoof.pkg" "$PKG_TARGET"
+resetprop "droidb.sigspoof.active" "1"
+
+# For LSPosed / XposedBridge environments: write stub to trigger SigSpoofHelper
+if [ -d /data/adb/lspd ] || [ -d /data/data/org.lsposed.manager ]; then
+    mkdir -p /data/adb/lspd/config
+    echo "$PKG_TARGET" >> /data/adb/lspd/config/droidb_sigspoof_pkgs 2>/dev/null
+fi
+SVCEOF
+    chmod 755 "$module_build_dir/service.sh"
+
+    # ── spoof config files ───────────────────────────────────
+    echo "$pkg"        > "$module_build_dir/system/etc/droidb/spoof_pkg"
+    echo "$src_sha256" > "$module_build_dir/system/etc/droidb/spoof_sha256"
+
+    # ── customize.sh — runs during flash ────────────────────
+    cat > "$module_build_dir/customize.sh" <<CUSTEOF
+#!/system/bin/sh
+ui_print "- droidB SigSpoof Module"
+ui_print "  Package : $pkg"
+ui_print "  Spoofing cert to match cloned system app"
+ui_print "  SHA-256 : $src_sha256"
+set_perm_recursive "\$MODPATH" root root 0755 0644
+ui_print "- Done. Reboot to activate."
+CUSTEOF
+
+    # ── Pack into zip ────────────────────────────────────────
+    echo -e "  ${CYAN}Building module zip…${ENDC}"
+    if command -v zip &>/dev/null; then
+        (cd "$module_build_dir" && zip -r "$module_zip" . -x "*.DS_Store") >/dev/null 2>&1
+    else
+        # fallback using Python zipfile
+        python3 -c "
+import zipfile, os, sys
+src = sys.argv[1]; dst = sys.argv[2]
+with zipfile.ZipFile(dst,'w',zipfile.ZIP_DEFLATED) as z:
+    for root,dirs,files in os.walk(src):
+        for f in files:
+            fp = os.path.join(root,f)
+            z.write(fp, os.path.relpath(fp,src))
+" "$module_build_dir" "$module_zip" 2>/dev/null
+    fi
+
+    rm -rf "$module_build_dir"
+
+    if [[ -f "$module_zip" ]]; then
+        echo -e "  ${GREEN}✓ Module built: $module_zip${ENDC}"
+        echo ""
+        echo -e "  ${BOLD}How to install:${ENDC}"
+        echo "    1. Open Magisk app → Modules → Install from storage"
+        echo "       Select: $module_zip"
+        echo "    2. OR push now if Magisk is already installed:"
+        echo ""
+        read -rp "  Push & install module to device now? [y/N]: " push_mod
+        if [[ "${push_mod,,}" == "y" ]]; then
+            local remote_mod="/data/local/tmp/${module_name}.zip"
+            $ADB -s "$SERIAL" push "$module_zip" "$remote_mod" 2>&1 | grep -v "^$" | sed 's/^/    /'
+            # Magisk CLI install
+            local magisk_result
+            magisk_result=$(_su "magisk --install-module '$remote_mod' 2>&1")
+            if echo "$magisk_result" | grep -qi "success\|done\|reboot"; then
+                echo -e "  ${GREEN}✓ Module installed via Magisk CLI — reboot to activate${ENDC}"
+            else
+                # Fallback: place in modules dir directly
+                local mod_dir="/data/adb/modules/${module_name}"
+                _su "mkdir -p '$mod_dir' && cd '$mod_dir' && unzip -o '$remote_mod' > /dev/null 2>&1"
+                echo -e "  ${GREEN}✓ Module placed in /data/adb/modules/ — reboot to activate${ENDC}"
+            fi
+            _su "rm '$remote_mod'" 2>/dev/null
+        fi
+        echo ""
+        echo -e "  ${CYAN}After reboot, '$pkg' will appear to have the same${ENDC}"
+        echo -e "  ${CYAN}signature as the source system app to any checking code.${ENDC}"
+    else
+        echo -e "  ${RED}✗ Failed to build module zip (install 'zip' or 'python3')${ENDC}"
+    fi
+}
+
+# ── sharedUserId manifest injection ──────────────────────────
+# Rebulids the APK's AndroidManifest.xml to declare a sharedUserId,
+# making Android run the app in the same process UID as a system app.
+_inject_shared_user_id() {
+    local apk_in="$1" pkg="$2"
+    SHARED_UID_APK=""   # output path
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ sharedUserId Injection ───────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Run your app as the same UID as a system app    ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo -e "  ${YELLOW}What sharedUserId does:${ENDC}"
+    echo "    Declaring android:sharedUserId in the manifest lets your"
+    echo "    app share the Linux UID of a system process.  Combined with"
+    echo "    a matching signature, the PM grants it the same permissions"
+    echo "    without any runtime prompts — it IS that system app."
+    echo ""
+    echo "  Common values:"
+    echo "    android.uid.system        — full system (UID 1000, all perms)"
+    echo "    android.uid.phone         — phone/RIL process (UID 1001)"
+    echo "    android.uid.bluetooth     — Bluetooth stack (UID 1002)"
+    echo "    android.uid.log           — read system logs (UID 1007)"
+    echo "    android.uid.shell         — shell (UID 2000)"
+    echo "    <custom>                  — share with any specific app's UID"
+    echo ""
+    echo -e "  ${RED}Requires: APK must be signed with the KEY that owns that UID.${ENDC}"
+    echo -e "  ${RED}Incorrect UID + wrong key = install failure, possible bootloop.${ENDC}"
+    echo ""
+
+    if ! command -v apktool &>/dev/null; then
+        echo -e "  ${YELLOW}⚠ apktool not found. Attempting binary manifest patch (experimental)…${ENDC}"
+        # Fallback: binary patch approach using python3
+        if ! command -v python3 &>/dev/null; then
+            echo -e "  ${RED}✗ python3 not found either — cannot inject sharedUserId${ENDC}"
+            echo -e "  ${YELLOW}  Install: sudo apt install apktool${ENDC}"
+            return 1
+        fi
+    fi
+
+    echo "  1. android.uid.system"
+    echo "  2. android.uid.phone"
+    echo "  3. android.uid.shell"
+    echo "  4. Custom value"
+    echo "  5. Skip sharedUserId injection"
+    echo ""
+    read -rp "  Choice [1-5, default=5]: " uid_choice
+    local suid_val=""
+    case "${uid_choice:-5}" in
+        1) suid_val="android.uid.system" ;;
+        2) suid_val="android.uid.phone" ;;
+        3) suid_val="android.uid.shell" ;;
+        4) read -rp "  Enter sharedUserId value: " suid_val ;;
+        5) echo -e "  ${CYAN}Skipping sharedUserId injection.${ENDC}"; return 0 ;;
+        *) echo -e "  ${CYAN}Skipping.${ENDC}"; return 0 ;;
+    esac
+
+    [[ -z "$suid_val" ]] && { echo -e "  ${CYAN}Skipping.${ENDC}"; return 0; }
+
+    local patched_apk="${apk_in%.apk}_suid.apk"
+
+    if command -v apktool &>/dev/null; then
+        echo -e "  ${CYAN}Decompiling APK with apktool…${ENDC}"
+        local decompile_dir="/tmp/droidb_suid_${pkg//[^a-zA-Z0-9]/_}_$$"
+        apktool d -f -o "$decompile_dir" "$apk_in" >/dev/null 2>&1
+        local manifest="$decompile_dir/AndroidManifest.xml"
+        if [[ ! -f "$manifest" ]]; then
+            echo -e "  ${RED}✗ apktool decompile failed${ENDC}"
+            rm -rf "$decompile_dir"; return 1
+        fi
+        # Inject or replace sharedUserId attribute
+        if grep -q 'sharedUserId' "$manifest"; then
+            sed -i "s/android:sharedUserId=\"[^\"]*\"/android:sharedUserId=\"$suid_val\"/" "$manifest"
+        else
+            sed -i "s|<manifest|<manifest android:sharedUserId=\"$suid_val\"|" "$manifest"
+        fi
+        echo -e "  ${CYAN}Repacking APK…${ENDC}"
+        apktool b -f "$decompile_dir" -o "$patched_apk" >/dev/null 2>&1
+        rm -rf "$decompile_dir"
+        if [[ -f "$patched_apk" ]]; then
+            echo -e "  ${GREEN}✓ sharedUserId=\"$suid_val\" injected${ENDC}"
+            SHARED_UID_APK="$patched_apk"
+        else
+            echo -e "  ${RED}✗ apktool repack failed${ENDC}"; return 1
+        fi
+    else
+        # Python binary patch — finds the sharedUserId string or inserts it
+        echo -e "  ${CYAN}Attempting binary manifest patch via python3…${ENDC}"
+        python3 - "$apk_in" "$patched_apk" "$suid_val" <<'PYEOF'
+import sys, zipfile, re, shutil
+
+apk_in, apk_out, suid = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with zipfile.ZipFile(apk_in,'r') as z:
+    raw = z.read('AndroidManifest.xml')
+
+# Look for existing sharedUserId UTF-16LE string in binary manifest
+marker = 'sharedUserId'.encode('utf-16-le')
+suid_bytes = suid.encode('utf-16-le')
+
+if marker in raw:
+    # Find the length-prefixed UTF-16LE string after the marker
+    idx = raw.index(marker)
+    # The string pool stores: [2-byte length][chars][00 00]
+    # Walk back to find the length field
+    start = idx - 2  # length is 2 bytes before the string
+    old_len = int.from_bytes(raw[start:start+2], 'little')
+    old_str = raw[start+2 : start+2 + old_len*2]
+    new_blob = len(suid).to_bytes(2,'little') + suid_bytes + b'\x00\x00'
+    old_blob = old_len.to_bytes(2,'little') + old_str + b'\x00\x00'
+    patched = raw.replace(old_blob, new_blob, 1)
+    if patched == raw:
+        print("WARNING: binary patch found no change — may need apktool", file=sys.stderr)
+    raw = patched
+
+shutil.copy(apk_in, apk_out)
+with zipfile.ZipFile(apk_out,'a') as z:
+    z.writestr('AndroidManifest.xml', raw)
+print("done")
+PYEOF
+        if [[ $? -eq 0 && -f "$patched_apk" ]]; then
+            echo -e "  ${GREEN}✓ Binary sharedUserId patch applied (\"$suid_val\")${ENDC}"
+            echo -e "  ${YELLOW}  Note: Binary patch is best-effort. Verify with aapt dump badging.${ENDC}"
+            SHARED_UID_APK="$patched_apk"
+        else
+            echo -e "  ${RED}✗ Binary patch failed — install apktool for reliable injection${ENDC}"
+            return 1
+        fi
+    fi
+}
+
+# ── Signing menu ──────────────────────────────────────────────
+_signing_menu() {
+    local apk_in="$1" pkg="$2"
+    SIGNED_APK_PATH=""
+
+    echo ""
+    echo -e "  ${BOLD}${CYAN}┌─ APK Signing Options ──────────────────────────┐${ENDC}"
+    echo -e "  ${BOLD}${CYAN}│${ENDC}  Optional — only needed for your own custom apps ${BOLD}${CYAN}│${ENDC}"
+    echo -e "  ${BOLD}${CYAN}└────────────────────────────────────────────────┘${ENDC}"
+    echo ""
+    echo "  Why sign? A consistent signing key means:"
+    echo "    • Updates accepted without uninstall"
+    echo "    • System won't flag the app as unknown"
+    echo "    • Signature permissions work reliably"
+    echo "    • App treated as trusted as the source app"
+    echo ""
+    echo "  Choose signing option:"
+    echo "    1. ⏭  Skip — use APK as-is (already signed / debug build)"
+    echo "    2. 🔑  Auto test-key — persistent droidB keystore"
+    echo "    3. 🗝  Custom keystore — your own .jks / .keystore"
+    echo "    4. 🏭  Inspect platform key (cert info only)"
+    echo "    5. 🪞  Clone signature from a system app on this device"
+    echo ""
+    read -rp "  Choice [1-5, default=1]: " sign_choice
+
+    local signed_out="/tmp/droidb_signed_${pkg}.apk"
+
+    case "${sign_choice:-1}" in
+        1)
+            echo -e "  ${CYAN}Skipping — APK used as-is.${ENDC}"
+            SIGNED_APK_PATH="$apk_in"
+            ;;
+        2)
+            _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
+            _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                && SIGNED_APK_PATH="$signed_out" \
+                || SIGNED_APK_PATH="$apk_in"
+            ;;
+        3)
+            _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
+            echo -e "  ${YELLOW}Drag & drop .jks / .keystore:${ENDC}"
+            read -rp "  Keystore path: " ks_raw
+            KS_FILE=$(process_path "$ks_raw")
+            if [[ ! -f "$KS_FILE" ]]; then
+                echo -e "  ${RED}✗ Not found — skipping.${ENDC}"
+                SIGNED_APK_PATH="$apk_in"; return
+            fi
+            read -rp "  Password: " KS_PASS
+            read -rp "  Alias: "    KS_ALIAS
+            _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                && SIGNED_APK_PATH="$signed_out" \
+                || SIGNED_APK_PATH="$apk_in"
+            ;;
+        4)
+            _extract_platform_key
+            _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
+            _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                && SIGNED_APK_PATH="$signed_out" \
+                || SIGNED_APK_PATH="$apk_in"
+            ;;
+        5)
+            _check_signing_tools || { SIGNED_APK_PATH="$apk_in"; return; }
+            if _clone_system_app_signature "$pkg"; then
+                if [[ -n "${CLONED_KS_FILE:-}" && -f "${CLONED_KS_FILE}" ]]; then
+                    # Swap in cloned keystore and sign
+                    KS_FILE="$CLONED_KS_FILE"
+                    KS_PASS="$CLONED_KS_PASS"
+                    KS_ALIAS="$CLONED_KS_ALIAS"
+                    echo -e "\n  ${CYAN}Signing with cloned keystore…${ENDC}"
+                    _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                        && {
+                            SIGNED_APK_PATH="$signed_out"
+                            echo -e "  ${GREEN}✓ Signed with cloned signature identity${ENDC}"
+                        } \
+                        || SIGNED_APK_PATH="$apk_in"
+                else
+                    # Clone returned info only — fall back
+                    echo -e "  ${YELLOW}No keystore produced — falling back to droidB test key.${ENDC}"
+                    _sign_apk_test_key "$apk_in" "$signed_out" "$pkg" \
+                        && SIGNED_APK_PATH="$signed_out" \
+                        || SIGNED_APK_PATH="$apk_in"
+                fi
+            else
+                SIGNED_APK_PATH="$apk_in"
+            fi
+            ;;
+        *)
+            SIGNED_APK_PATH="$apk_in" ;;
+    esac
+}
+# ── Main system app push function ────────────────────────────
+push_system_app() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}🔧 PUSH APK AS SYSTEM APP${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${RED}${BOLD}⚠  TINKERERS ONLY — Root required. Wrong APKs can"
+    echo -e "   bootloop your device. Always back up first!${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}\n"
+
+    # ── Root check ──────────────────────────────────────────
+    echo -e "  ${CYAN}Checking root access…${ENDC}"
+    if ! _check_root; then
+        echo -e "  ${RED}✗ Root not detected. Install Magisk or KernelSU.${ENDC}"
+        read -rp "  Press ENTER to return…" _; return
+    fi
+    echo -e "  ${GREEN}✓ Root confirmed${ENDC}\n"
+
+    # ── APK selection ───────────────────────────────────────
+    echo -e "  ${YELLOW}Drag & drop APK or type path:${ENDC}"
+    read -rp "  APK file: " APK_RAW
+    local APK; APK=$(process_path "$APK_RAW")
+    if [[ ! -f "$APK" ]]; then
+        echo -e "  ${RED}✗ File not found: $APK${ENDC}"
+        read -rp "  Press ENTER…" _; return
+    fi
+    _validate_apk "$APK" || { read -rp "  Press ENTER…" _; return; }
+
+    local PKG_NAME; PKG_NAME=$(_get_pkg_name "$APK")
+    local APK_BASENAME; APK_BASENAME=$(basename "$APK")
+    local APK_SIZE; APK_SIZE=$(du -sh "$APK" | cut -f1)
+
+    echo -e "\n  ${BOLD}APK details:${ENDC}"
+    echo -e "    Package : ${CYAN}$PKG_NAME${ENDC}"
+    echo -e "    File    : ${CYAN}$APK_BASENAME${ENDC}"
+    echo -e "    Size    : ${MAGENTA}$APK_SIZE${ENDC}"
+
+    # ── Step 1: Target directory ─────────────────────────────
+    _pick_system_dir
+
+    # ── Step 2: Permission profile ───────────────────────────
+    _SIGNING_APK_PATH="$APK"  # used by auto-detect inside _permission_profile_menu
+    _permission_profile_menu
+
+    # ── Step 2.5: sharedUserId injection ─────────────────────
+    _inject_shared_user_id "$APK" "$PKG_NAME"
+    # If injection produced a new APK, use it as the base for signing
+    [[ -n "${SHARED_UID_APK:-}" && -f "$SHARED_UID_APK" ]] && APK="$SHARED_UID_APK"
+
+    # ── Step 3: Signing ──────────────────────────────────────
+    _signing_menu "$APK" "$PKG_NAME"
+    local FINAL_APK="$SIGNED_APK_PATH"
+
+    # ── Step 4: Root grant ───────────────────────────────────
+    local GRANT_ROOT="n"
+    echo ""
+    read -rp "  Grant root access to this app via Magisk/KernelSU? [y/N]: " GRANT_ROOT
+
+    # ── Setup paths ──────────────────────────────────────────
+    local APP_FOLDER="$SYS_TARGET/$PKG_NAME"
+    local REMOTE_APK="$APP_FOLDER/$PKG_NAME.apk"
+
+    # ── Existing app check ───────────────────────────────────
+    local existing; existing=$(_su "[ -d '$APP_FOLDER' ] && echo exists")
+    if [[ "$existing" == "exists" ]]; then
+        echo -e "\n  ${YELLOW}⚠ App folder already exists: $APP_FOLDER${ENDC}"
+        echo "    1. Overwrite    2. Cancel"
+        read -rp "  Choice [1-2]: " ow_choice
+        [[ "${ow_choice:-2}" != "1" ]] && { echo -e "  ${CYAN}Cancelled.${ENDC}"; read -rp "  Press ENTER…" _; return; }
+    fi
+
+    # ── Summary before commit ────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Operation summary:${ENDC}"
+    echo -e "    Package    : ${CYAN}$PKG_NAME${ENDC}"
+    echo -e "    Destination: ${CYAN}$REMOTE_APK${ENDC}"
+    echo -e "    APK source : ${CYAN}$(basename "$FINAL_APK")${ENDC}"
+    local perm_cnt; perm_cnt=$(echo "$SELECTED_PERMS" | grep -c "android\." 2>/dev/null || echo 0)
+    echo -e "    Permissions: ${MAGENTA}$perm_cnt to auto-grant${ENDC}"
+    [[ -n "${SHARED_UID_APK:-}" ]] && echo -e "    sharedUserId: ${GREEN}injected${ENDC}"
+    [[ "$SYS_TARGET" == *"priv-app"* ]] && echo -e "    privapp XML: ${GREEN}yes${ENDC}"
+    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "    Root grant : ${GREEN}yes (Magisk/KernelSU)${ENDC}"
+    echo ""
+    read -rp "  Proceed? [y/N]: " confirm
+    [[ "${confirm,,}" != "y" ]] && { echo -e "  ${CYAN}Aborted.${ENDC}"; read -rp "  Press ENTER…" _; return; }
+
+    echo ""
+
+    # ── Remount rw ───────────────────────────────────────────
+    _remount_rw || { read -rp "  Press ENTER…" _; return; }
+
+    # ── Create dir & push APK ────────────────────────────────
+    echo -e "  ${CYAN}Creating app directory…${ENDC}"
+    _su "mkdir -p '$APP_FOLDER'"
+
+    echo -e "  ${CYAN}Uploading APK via staging…${ENDC}"
+    $ADB -s "$SERIAL" push "$FINAL_APK" "/data/local/tmp/$PKG_NAME.apk" 2>&1 \
+        | grep -v "^$" | sed 's/^/    /'
+    _su "cp /data/local/tmp/$PKG_NAME.apk '$REMOTE_APK'"
+    _su "rm /data/local/tmp/$PKG_NAME.apk"
+
+    # ── Verify ───────────────────────────────────────────────
+    local landed; landed=$(_su "[ -f '$REMOTE_APK' ] && stat -c '%s' '$REMOTE_APK'")
+    if [[ -z "$landed" || "$landed" == "0" ]]; then
+        echo -e "  ${RED}✗ APK did not land — aborting${ENDC}"
+        _remount_ro; read -rp "  Press ENTER…" _; return
+    fi
+    echo -e "  ${GREEN}✓ APK placed (${MAGENTA}$(numfmt --to=iec "$landed" 2>/dev/null || echo "${landed}B")${GREEN})${ENDC}"
+
+    # ── File system permissions & SELinux ────────────────────
+    echo -e "  ${CYAN}Setting ownership, permissions, SELinux context…${ENDC}"
+    _su "chown root:root '$REMOTE_APK' && chmod 644 '$REMOTE_APK'"
+    _su "chown root:root '$APP_FOLDER' && chmod 755 '$APP_FOLDER'"
+    _su "chcon -R u:object_r:system_file:s0 '$APP_FOLDER'" 2>/dev/null \
+        && echo -e "  ${GREEN}✓ SELinux context set${ENDC}" \
+        || echo -e "  ${YELLOW}⚠ SELinux context skipped (non-fatal)${ENDC}"
+
+    # ── Write privapp-permissions XML ────────────────────────
+    _write_privapp_permissions_xml "$PKG_NAME"
+
+    # ── Remount ro ───────────────────────────────────────────
+    _remount_ro
+
+    # ── PM install/rescan ────────────────────────────────────
+    echo -e "  ${CYAN}Triggering PM rescan…${ENDC}"
+    _su "pm install -r '$REMOTE_APK'" 2>/dev/null \
+        && echo -e "  ${GREEN}✓ PM accepted — app active immediately${ENDC}" \
+        || echo -e "  ${YELLOW}⚠ PM rescan skipped — reboot required${ENDC}"
+
+    # ── Grant runtime permissions ────────────────────────────
+    if [[ -n "$SELECTED_PERMS" ]]; then
+        _grant_permissions "$PKG_NAME"
+    fi
+
+    # ── Grant root access ────────────────────────────────────
+    if [[ "${GRANT_ROOT,,}" == "y" ]]; then
+        _grant_root_to_app "$PKG_NAME"
+    fi
+
+    # ── Clean up signed/patched tmp APKs ─────────────────────
+    [[ "$FINAL_APK" != "$APK" && -f "$FINAL_APK" ]] && rm -f "$FINAL_APK"
+    [[ -n "${SHARED_UID_APK:-}" && "$SHARED_UID_APK" != "$APK" ]] && rm -f "$SHARED_UID_APK"
+
+    # ── Summary ──────────────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
+    echo -e "${BOLD}${GREEN}  ✓ System App Installed & Configured${ENDC}"
+    echo -e "${GREEN}  Package    : $PKG_NAME${ENDC}"
+    echo -e "${GREEN}  Location   : $REMOTE_APK${ENDC}"
+    local perm_cnt2; perm_cnt2=$(echo "$SELECTED_PERMS" | grep -c "android\." 2>/dev/null || echo 0)
+    echo -e "${GREEN}  Permissions: $perm_cnt2 auto-granted${ENDC}"
+    [[ "${GRANT_ROOT,,}" == "y" ]] && echo -e "${GREEN}  Root access: granted${ENDC}"
+    [[ -n "${KS_FILE:-}" ]] && echo -e "${CYAN}  Keystore   : $KS_FILE${ENDC}"
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════${ENDC}"
+
+    echo ""
+    echo -e "  ${YELLOW}Reboot recommended to fully activate the system app.${ENDC}"
+    read -rp "  Reboot device now? [y/N]: " reboot_choice
+    if [[ "${reboot_choice,,}" == "y" ]]; then
+        echo -e "  ${CYAN}Rebooting…${ENDC}"
+        $ADB -s "$SERIAL" reboot
+    fi
+
+    read -rp "  Press ENTER to return to App Management…" _
+}
+
 app_management_menu() {
     while true; do
         clear_screen
@@ -1469,7 +2946,8 @@ app_management_menu() {
         echo "5. List third-party apps"
         echo "6. Clear app data"
         echo "7. Force stop app"
-        echo "8. Back"
+        echo "8. 🔧 Push APK as System App (tinkerers)"
+        echo "9. Back"
         echo ""
         
         read -p "Select: " opt
@@ -1530,7 +3008,8 @@ app_management_menu() {
                 fi
                 read -p "Press Enter..."
                 ;;
-            8) return ;;
+            8) push_system_app ;;
+            9) return ;;
             *)
                 echo -e "${RED}Invalid option${ENDC}"
                 sleep 1
@@ -1753,6 +3232,7 @@ fastboot_operations_menu() {
                 read -p "Image: " IMG
                 IMG=$(process_path "$IMG")
                 if [[ -f "$IMG" ]]; then
+                    pre_flash_backup_check || { read -p "Press Enter..."; continue; }
                     confirm_action "Flash $PART?" && {
                         echo -e "${BLUE}Flashing...${ENDC}"
                         $FASTBOOT flash $PART "$IMG"
@@ -1778,6 +3258,7 @@ fastboot_operations_menu() {
                 ;;
             3)
                 echo -e "${RED}${BOLD}WARNING: This will WIPE ALL DATA${ENDC}"
+                pre_flash_backup_check || { read -p "Press Enter..."; continue; }
                 confirm_action "Unlock bootloader?" && {
                     echo -e "${BLUE}Unlocking bootloader...${ENDC}"
                     $FASTBOOT flashing unlock 2>/dev/null || $FASTBOOT oem unlock 2>/dev/null
@@ -1868,6 +3349,349 @@ check_requirements() {
     $ADB start-server &>/dev/null
 }
 
+# ============================================================
+#  FULL DEVICE BACKUP  (v0.3.0 — pre-flash data protection)
+# ============================================================
+
+# Helper: progress spinner
+_spin() {
+    local pid=$1 msg=$2
+    local sp='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  ${CYAN}%s${ENDC} %s " "${sp:$((i%10)):1}" "$msg"
+        i=$((i+1)); sleep 0.1
+    done
+    printf "\r  ${GREEN}✓${ENDC} %-60s\n" "$msg"
+}
+
+# Helper: section header
+_bsec() { echo -e "\n${BOLD}${CYAN}▶ $1${ENDC}"; echo -e "${YELLOW}$(printf '─%.0s' {1..60})${ENDC}"; }
+
+# Helper: size of local dir/file
+_sz() { du -sh "$1" 2>/dev/null | cut -f1; }
+
+# ── choose / create backup destination ──────────────────────
+_backup_pick_dest() {
+    local default_dir="$HOME/droidB_backups/$(date +%Y%m%d_%H%M%S)_${SERIAL}"
+    echo -e "\n${BOLD}Backup destination${ENDC}"
+    echo -e "  Default: ${CYAN}$default_dir${ENDC}"
+    read -rp "  Press ENTER to accept or type a custom path: " custom
+    BACKUP_DIR="${custom:-$default_dir}"
+    mkdir -p "$BACKUP_DIR" || { echo -e "${RED}Cannot create: $BACKUP_DIR${ENDC}"; return 1; }
+    echo -e "  ${GREEN}✓ Saving to: $BACKUP_DIR${ENDC}"
+}
+
+# ── SMS backup ───────────────────────────────────────────────
+backup_sms() {
+    _bsec "SMS Messages"
+    local out="$BACKUP_DIR/sms_mms.ab"
+    echo -e "  ${YELLOW}Unlocking device before adb backup — accept the prompt on screen${ENDC}"
+    $ADB -s "$SERIAL" backup -noapk -noshared com.android.providers.telephony -f "$out" &
+    local pid=$!
+    _spin $pid "Backing up SMS/MMS (accept prompt on device)…"
+    wait $pid
+    if [[ -f "$out" && -s "$out" ]]; then
+        echo -e "  ${GREEN}✓ SMS/MMS saved (${MAGENTA}$(_sz "$out")${GREEN})${ENDC}"
+    else
+        # fallback: content query CSV export
+        echo -e "  ${YELLOW}⚠ adb backup blocked — trying content provider dump…${ENDC}"
+        local csv="$BACKUP_DIR/sms_dump.csv"
+        echo "date,address,type,body" > "$csv"
+        $ADB -s "$SERIAL" shell content query \
+            --uri content://sms \
+            --projection date,address,type,body 2>/dev/null \
+            | sed 's/Row: [0-9]* //' \
+            | sed 's/, /\t/g' \
+            >> "$csv"
+        local rows; rows=$(wc -l < "$csv")
+        if [[ $rows -gt 1 ]]; then
+            echo -e "  ${GREEN}✓ SMS CSV dump: $((rows-1)) messages → sms_dump.csv${ENDC}"
+        else
+            echo -e "  ${RED}✗ SMS backup failed (no root / blocked by ROM)${ENDC}"
+        fi
+    fi
+}
+
+# ── Contacts backup ──────────────────────────────────────────
+backup_contacts() {
+    _bsec "Contacts"
+    local vcf="$BACKUP_DIR/contacts.vcf"
+    # Try vCard export via content provider
+    $ADB -s "$SERIAL" shell content query \
+        --uri content://com.android.contacts/contacts 2>/dev/null \
+        | grep -q "Row:" && {
+        # proper vCard pull via vcard MIME type stream
+        $ADB -s "$SERIAL" shell "
+            for id in \$(content query --uri content://com.android.contacts/contacts --projection _id 2>/dev/null | grep -oP '_id=\K[0-9]+'); do
+                content read --uri \"content://com.android.contacts/contacts/\$id/display_photo\" 2>/dev/null
+            done" > /dev/null 2>&1
+        # Use adb backup for contacts DB
+        local out="$BACKUP_DIR/contacts.ab"
+        $ADB -s "$SERIAL" backup -noapk -noshared com.android.providers.contacts -f "$out" &>/dev/null &
+        local pid=$!
+        _spin $pid "Backing up Contacts (accept prompt on device)…"
+        wait $pid
+        if [[ -f "$out" && -s "$out" ]]; then
+            echo -e "  ${GREEN}✓ Contacts DB backup (${MAGENTA}$(_sz "$out")${GREEN}) → contacts.ab${ENDC}"
+            return
+        fi
+    }
+    # Fallback: vcard via content://com.android.contacts/contacts/as_vcard
+    echo -e "  ${YELLOW}Trying vCard stream export…${ENDC}"
+    $ADB -s "$SERIAL" shell \
+        "content read --uri \"content://com.android.contacts/contacts/as_vcard\"" \
+        > "$vcf" 2>/dev/null
+    local cnt; cnt=$(grep -c "^BEGIN:VCARD" "$vcf" 2>/dev/null || echo 0)
+    if [[ $cnt -gt 0 ]]; then
+        echo -e "  ${GREEN}✓ $cnt contact(s) saved → contacts.vcf${ENDC}"
+    else
+        echo -e "  ${RED}✗ Contacts backup failed (no root / blocked by ROM)${ENDC}"
+        rm -f "$vcf"
+    fi
+}
+
+# ── Call logs backup ─────────────────────────────────────────
+backup_call_logs() {
+    _bsec "Call Logs"
+    local csv="$BACKUP_DIR/call_logs.csv"
+    echo "date,number,name,duration_sec,type" > "$csv"
+    $ADB -s "$SERIAL" shell content query \
+        --uri content://call_log/calls \
+        --projection date,number,cachedName,duration,type 2>/dev/null \
+        | sed 's/Row: [0-9]* //' \
+        | sed 's/cachedName=/name=/g' \
+        | awk -F', ' '{
+            for(i=1;i<=NF;i++){
+                split($i,kv,"="); vals[kv[1]]=kv[2]
+            }
+            print vals["date"] "," vals["number"] "," vals["name"] "," vals["duration"] "," vals["type"]
+          }' \
+        >> "$csv"
+    local rows; rows=$(wc -l < "$csv")
+    if [[ $rows -gt 1 ]]; then
+        echo -e "  ${GREEN}✓ $((rows-1)) call log entries → call_logs.csv${ENDC}"
+    else
+        echo -e "  ${RED}✗ Call log backup failed (blocked by ROM)${ENDC}"
+    fi
+}
+
+# ── Media backup ─────────────────────────────────────────────
+backup_media() {
+    _bsec "Media Files (Photos, Videos, Audio, Documents)"
+    local media_dir="$BACKUP_DIR/media"
+    mkdir -p "$media_dir"
+
+    # Paths to pull
+    local paths=(
+        "/sdcard/DCIM"
+        "/sdcard/Pictures"
+        "/sdcard/Movies"
+        "/sdcard/Videos"
+        "/sdcard/Music"
+        "/sdcard/Ringtones"
+        "/sdcard/Podcasts"
+        "/sdcard/Audiobooks"
+        "/sdcard/Documents"
+        "/sdcard/Download"
+        "/sdcard/WhatsApp"
+        "/sdcard/Telegram"
+    )
+
+    local total_pulled=0
+    local failed_paths=()
+
+    for remote_path in "${paths[@]}"; do
+        # Check if path exists on device
+        local exists
+        exists=$($ADB -s "$SERIAL" shell "[ -d '$remote_path' ] && echo yes" 2>/dev/null | tr -d '\r')
+        [[ "$exists" != "yes" ]] && continue
+
+        local folder_name; folder_name=$(basename "$remote_path")
+        local local_dest="$media_dir/$folder_name"
+        mkdir -p "$local_dest"
+
+        printf "  ${CYAN}Pulling${ENDC} %-28s" "$folder_name…"
+        $ADB -s "$SERIAL" pull "$remote_path/." "$local_dest/" >/dev/null 2>&1
+        local status=$?
+        local count; count=$(find "$local_dest" -type f 2>/dev/null | wc -l)
+        if [[ $status -eq 0 || $count -gt 0 ]]; then
+            echo -e " ${GREEN}✓${ENDC} $count file(s)  (${MAGENTA}$(_sz "$local_dest")${ENDC})"
+            total_pulled=$((total_pulled + count))
+        else
+            echo -e " ${YELLOW}⚠ skipped (empty or no access)${ENDC}"
+        fi
+    done
+
+    echo -e "\n  ${BOLD}Total media files pulled: ${GREEN}$total_pulled${ENDC}"
+    echo -e "  ${BOLD}Media backup size:        ${MAGENTA}$(_sz "$media_dir")${ENDC}"
+}
+
+# ── APK backup ───────────────────────────────────────────────
+backup_apps() {
+    _bsec "Installed Apps (APKs)"
+    local apk_dir="$BACKUP_DIR/apks"
+    mkdir -p "$apk_dir"
+
+    echo -e "  ${YELLOW}Fetching installed third-party packages…${ENDC}"
+    local packages
+    packages=$($ADB -s "$SERIAL" shell pm list packages -3 2>/dev/null | sed 's/package://' | tr -d '\r')
+
+    local total=0 failed=0
+    while IFS= read -r pkg; do
+        [[ -z "$pkg" ]] && continue
+        # Get APK path on device
+        local apk_path
+        apk_path=$($ADB -s "$SERIAL" shell pm path "$pkg" 2>/dev/null | sed 's/package://' | tr -d '\r ')
+        if [[ -z "$apk_path" ]]; then
+            ((failed++)); continue
+        fi
+        local apk_name="${pkg}.apk"
+        $ADB -s "$SERIAL" pull "$apk_path" "$apk_dir/$apk_name" >/dev/null 2>&1
+        if [[ -f "$apk_dir/$apk_name" ]]; then
+            printf "  ${GREEN}✓${ENDC} %-55s %s\n" "$pkg" "$(_sz "$apk_dir/$apk_name")"
+            ((total++))
+        else
+            ((failed++))
+        fi
+    done <<< "$packages"
+
+    echo -e "\n  ${BOLD}APKs backed up: ${GREEN}$total${ENDC}  ${YELLOW}Failed: $failed${ENDC}"
+    echo -e "  ${BOLD}APK dir size:   ${MAGENTA}$(_sz "$apk_dir")${ENDC}"
+}
+
+# ── Full ADB backup (everything) ─────────────────────────────
+backup_full_adb() {
+    _bsec "Full ADB System Backup (.ab archive)"
+    local out="$BACKUP_DIR/full_backup_$(date +%Y%m%d_%H%M%S).ab"
+    echo -e "  ${YELLOW}⚠ You MUST accept the backup prompt on your device screen!${ENDC}"
+    echo -e "  ${YELLOW}  Leave password blank unless you want encryption.${ENDC}\n"
+    sleep 2
+    $ADB -s "$SERIAL" backup -apk -shared -all -system -f "$out"
+    if [[ -f "$out" && -s "$out" ]]; then
+        echo -e "\n  ${GREEN}✓ Full backup saved (${MAGENTA}$(_sz "$out")${GREEN}) → $(basename "$out")${ENDC}"
+        echo -e "  ${CYAN}Restore later with:${ENDC} adb restore \"$out\""
+    else
+        echo -e "\n  ${RED}✗ Full ADB backup failed or was cancelled on device.${ENDC}"
+    fi
+}
+
+# ── Backup summary / manifest ────────────────────────────────
+_backup_manifest() {
+    local manifest="$BACKUP_DIR/BACKUP_MANIFEST.txt"
+    {
+        echo "════════════════════════════════════════════════════"
+        echo "  droidB Full Backup — $(date)"
+        echo "════════════════════════════════════════════════════"
+        echo "Device Serial : $SERIAL"
+        echo "Device Model  : $(echo "$DEVICE_INFO" | grep -oP 'model=\K[^ ]+' || echo 'Unknown')"
+        echo "Android Ver   : $($ADB -s "$SERIAL" shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')"
+        echo "SDK Level     : $($ADB -s "$SERIAL" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')"
+        echo "Build         : $($ADB -s "$SERIAL" shell getprop ro.build.display.id 2>/dev/null | tr -d '\r')"
+        echo "IMEI          : $($ADB -s "$SERIAL" shell service call iphonesubinfo 1 2>/dev/null | grep -oP "'\K[^']+" | tr -d '.' | head -1 || echo 'N/A')"
+        echo "────────────────────────────────────────────────────"
+        echo "Backup Location: $BACKUP_DIR"
+        echo "Total Size     : $(_sz "$BACKUP_DIR")"
+        echo ""
+        echo "Contents:"
+        find "$BACKUP_DIR" -maxdepth 3 -not -name "BACKUP_MANIFEST.txt" \
+            | sed 's|'"$BACKUP_DIR"'/||' | sort
+        echo "════════════════════════════════════════════════════"
+    } > "$manifest"
+    echo -e "\n  ${CYAN}Manifest written → BACKUP_MANIFEST.txt${ENDC}"
+}
+
+# ── Pre-flash backup wizard (shown before flash operations) ──
+pre_flash_backup_check() {
+    echo -e "\n${BOLD}${RED}╔══════════════════════════════════════════════════╗${ENDC}"
+    echo -e "${BOLD}${RED}║   ⚠  PRE-FLASH SAFETY CHECK — BACKUP FIRST!   ║${ENDC}"
+    echo -e "${BOLD}${RED}╚══════════════════════════════════════════════════╝${ENDC}"
+    echo -e "${YELLOW}Flashing will ERASE all data on the device."
+    echo -e "It is strongly recommended to create a full backup first.${ENDC}\n"
+    echo "  1. Create Full Backup now (recommended)"
+    echo "  2. Skip — I already have a backup"
+    echo "  3. Cancel flash operation"
+    read -rp "Choice [1-3]: " pre_choice
+    case $pre_choice in
+        1) full_backup_menu; return 0 ;;
+        2) echo -e "${YELLOW}Proceeding without backup — you accepted the risk.${ENDC}"; return 0 ;;
+        3) return 1 ;;
+        *) echo -e "${RED}Invalid choice. Returning to menu.${ENDC}"; return 1 ;;
+    esac
+}
+
+# ── Main backup menu ─────────────────────────────────────────
+full_backup_menu() {
+    if [[ -z "$SERIAL" ]]; then
+        echo -e "${RED}✗ No device connected. Connect your device and enable USB Debugging.${ENDC}"
+        sleep 3; return
+    fi
+
+    while true; do
+        clear_screen
+        display_banner
+        _bsec "Full Device Backup"
+        echo -e "  Device: ${GREEN}$(echo "$DEVICE_INFO" | grep -oP 'model=\K[^ ]+' || echo 'Unknown')${ENDC}  Serial: ${CYAN}$SERIAL${ENDC}"
+        echo ""
+        echo "  1. 🗂  Full Backup (All categories below — RECOMMENDED)"
+        echo "  2. 💬  SMS & MMS Messages"
+        echo "  3. 👥  Contacts (VCF / DB)"
+        echo "  4. 📞  Call Logs (CSV)"
+        echo "  5. 🖼  Media Files (Photos, Videos, Audio, Docs)"
+        echo "  6. 📦  Installed APKs"
+        echo "  7. 💾  Full ADB System Backup (.ab file)"
+        echo "  8. 📂  Open backup folder in file manager"
+        echo "  b. ← Back to Main Menu"
+        echo ""
+        read -rp "  Select option: " bk_choice
+
+        # Pick destination once per session
+        if [[ -z "${BACKUP_DIR:-}" || ! -d "${BACKUP_DIR:-}" ]]; then
+            _backup_pick_dest || { sleep 2; continue; }
+        fi
+
+        case $bk_choice in
+            1)
+                echo -e "\n${BOLD}${CYAN}Starting Full Device Backup…${ENDC}"
+                echo -e "${YELLOW}Keep the device unlocked and accept any prompts on screen.${ENDC}\n"
+                backup_sms
+                backup_contacts
+                backup_call_logs
+                backup_media
+                backup_apps
+                backup_full_adb
+                _backup_manifest
+                echo -e "\n${BOLD}${GREEN}════════════════════════════════════════${ENDC}"
+                echo -e "${BOLD}${GREEN}  ✓ FULL BACKUP COMPLETE${ENDC}"
+                echo -e "${GREEN}  Location: $BACKUP_DIR${ENDC}"
+                echo -e "${GREEN}  Total size: $(_sz "$BACKUP_DIR")${ENDC}"
+                echo -e "${BOLD}${GREEN}════════════════════════════════════════${ENDC}"
+                read -rp "  Press ENTER to continue…" _
+                ;;
+            2) backup_sms; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            3) backup_contacts; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            4) backup_call_logs; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            5) backup_media; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            6) backup_apps; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            7) backup_full_adb; _backup_manifest; read -rp "  Press ENTER…" _ ;;
+            8)
+                if [[ -n "${BACKUP_DIR:-}" && -d "$BACKUP_DIR" ]]; then
+                    # Try to open in file manager
+                    xdg-open "$BACKUP_DIR" 2>/dev/null || \
+                    open "$BACKUP_DIR" 2>/dev/null || \
+                    echo -e "  ${CYAN}Backup folder: $BACKUP_DIR${ENDC}"
+                else
+                    echo -e "  ${YELLOW}No backup created yet in this session.${ENDC}"
+                fi
+                sleep 2
+                ;;
+            b|B) BACKUP_DIR=""; return ;;
+            *)
+                echo -e "${RED}Invalid option${ENDC}"; sleep 1 ;;
+        esac
+    done
+}
+
 main_menu() {
     while true; do
         clear_screen
@@ -1892,7 +3716,8 @@ main_menu() {
         echo "  5. System Operations"
         echo "  6. Fastboot Operations"
         echo "  7. Samsung Operations 📱"
-        echo "  8. Install System-Wide"
+        echo "  8. 💾 Full Device Backup (SMS, Contacts, Media, APKs)"
+        echo "  9. Install System-Wide"
         echo "  q. Exit"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
         
@@ -1906,7 +3731,8 @@ main_menu() {
             5) system_operations_menu ;;
             6) fastboot_operations_menu ;;
             7) samsung_operations_menu ;;
-            8) install_systemwide ;;
+            8) [[ -n "$SERIAL" ]] && full_backup_menu || { echo -e "${RED}No device connected${ENDC}"; sleep 2; } ;;
+            9) install_systemwide ;;
             q|Q) exit 0 ;;
             *)
                 echo -e "${RED}Invalid option${ENDC}"
