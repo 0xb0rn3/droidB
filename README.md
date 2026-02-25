@@ -279,6 +279,7 @@ graph LR
 # Clone repository
 git clone https://github.com/0xb0rn3/droidB.git
 cd droidB
+chmod +x droidB
 
 # Install globally
 sudo ./droidB --install
@@ -748,69 +749,6 @@ All removals use `pm disable-user --user 0` by default (non-destructive, reversi
 </div>
 
 ---
-
-<br/>
-
-## 🚀 What's Next?
-
-<div align="center">
-
-### **Roadmap & Future Plans**
-
-</div>
-
-<table>
-<tr>
-<td width="50%">
-
-### ✅ Shipped in v0.3.0
-
-- [x] 💾 **Full Device Backup**
-  - SMS, contacts, call logs
-  - All media types (PNG, WAV, MP4, docs)
-  - APK archive + full .ab clone
-  - Pre-flash auto-prompt gate
-
-- [x] 🔧 **System App Push (Tinkerer)**
-  - /system/priv-app placement
-  - Permission profile system
-  - privapp-permissions XML
-
-- [x] 🔑 **APK Signing Suite**
-  - Persistent test keystore
-  - Custom keystore support
-  - Signature cloning from device
-  - pk8 + pem import pipeline
-  - Magisk/KernelSU root DB grant
-
-</td>
-<td width="50%">
-
-### 🎯 Coming Next (v0.4.0)
-
-- [ ] 📊 **Advanced Analytics Dashboard**
-  - Real-time device monitoring
-  - Performance metrics
-  - Storage analysis
-
-- [ ] 🤖 **AI-Powered Debloat Suggestions**
-  - Smart package detection
-  - Usage-based recommendations
-  - Safe removal predictions
-
-- [ ] 🌐 **Web Interface (Optional)**
-  - Browser-based management
-  - Remote device control
-  - Multi-device dashboard
-
-- [ ] ☁️ **Cloud Backup Integration**
-  - Automatic cloud backups
-  - Profile synchronization
-  - Encrypted off-device storage
-
-</td>
-</tr>
-</table>
 
 <br/>
 
