@@ -2,6 +2,9 @@
 
 set -uo pipefail 
 
+# Ensure standard utility paths are available (fixes Archcraft/minimal installs)
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 VERSION="0.3.1"
 SCRIPT_NAME="droidB"
 INSTALL_DIR="/usr/local/bin"
@@ -476,7 +479,7 @@ EOF
 }
 
 clear_screen() {
-    clear
+    command -v clear &>/dev/null && clear || printf '\033[2J\033[H'
     echo -ne "\033]0;droidB v$VERSION\007"
 }
 
@@ -3644,6 +3647,11 @@ full_backup_menu() {
         echo "  b. ← Back to Main Menu"
         echo ""
         read -rp "  Select option: " bk_choice
+
+        # Handle back immediately — before destination picker
+        case $bk_choice in
+            b|B) BACKUP_DIR=""; return ;;
+        esac
 
         # Pick destination once per session
         if [[ -z "${BACKUP_DIR:-}" || ! -d "${BACKUP_DIR:-}" ]]; then
