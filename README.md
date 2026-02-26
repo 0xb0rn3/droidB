@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=250&section=header&text=droidB&fontSize=100&fontAlignY=40&animation=twinkling&fontColor=fff&desc=Android%20Security%20Testing%20%26%20Device%20Management&descAlignY=60&descSize=25" width="100%"/>
-</p>
-
-<p align="center">
   <a href="https://github.com/0xb0rn3/droidB/releases"><img src="https://img.shields.io/badge/version-0.3.1-00d4ff?style=for-the-badge&logo=semver&logoColor=white"/></a>
   <a href="https://github.com/0xb0rn3/droidB/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-00ff88?style=for-the-badge&logo=open-source-initiative&logoColor=white"/></a>
   <a href="https://github.com/0xb0rn3/droidB/stargazers"><img src="https://img.shields.io/github/stars/0xb0rn3/droidB?style=for-the-badge&logo=github&color=ffbb00&logoColor=white"/></a>
