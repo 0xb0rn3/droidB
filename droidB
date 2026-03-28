@@ -6417,6 +6417,411 @@ security_testing_menu() {
     done
 }
 
+#  MediaTek device flashing via SP Flash Tool v5/v6 Handles: udev rules, BROM detection, scatter flash, partition flash
+SPFT_INSTALLED=false
+SPFT_BIN=""
+
+check_mtk_tools() {
+    for bin in spflashtool flash_tool SP_Flash_Tool; do
+        if command -v "$bin" &>/dev/null; then
+            SPFT_BIN=$(command -v "$bin")
+            SPFT_INSTALLED=true
+            return
+        fi
+    done
+    for path in \
+        "$HOME/SPFlashTool/flash_tool" \
+        "$HOME/sp_flash_tool/flash_tool" \
+        "/opt/spflashtool/flash_tool" \
+        "/opt/SP_Flash_Tool/flash_tool"; do
+        if [[ -x "$path" ]]; then
+            SPFT_BIN="$path"
+            SPFT_INSTALLED=true
+            return
+        fi
+    done
+}
+
+setup_mtk_udev_rules() {
+    local RULES_FILE="/etc/udev/rules.d/51-mtk.rules"
+    echo -e "${BLUE}Setting up MediaTek USB udev rules...${ENDC}"
+    cat << 'EOF' | sudo tee "$RULES_FILE" > /dev/null
+# MediaTek BROM / Preloader
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0e8d", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0e8d", ATTRS{idProduct}=="20ff", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0e8d", ATTRS{idProduct}=="0003", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0e8d", MODE="0666"
+EOF
+    sudo udevadm control --reload-rules && sudo udevadm trigger
+    if ! getent group plugdev &>/dev/null; then
+        echo -e "${YELLOW}Creating plugdev group...${ENDC}"
+        sudo groupadd plugdev
+    fi
+    sudo usermod -aG plugdev,uucp "$USER" 2>/dev/null
+    echo -e "${GREEN}✓ MTK udev rules written to $RULES_FILE${ENDC}"
+    echo -e "${CYAN}  Apply without logout: ${BOLD}newgrp uucp${ENDC}"
+}
+
+detect_mtk_device() {
+    local found
+    found=$(lsusb 2>/dev/null | grep -i "0e8d:")
+    if [[ -n "$found" ]]; then
+        echo -e "  ${GREEN}✓ MTK device detected:${ENDC}"
+        while IFS= read -r line; do
+            echo -e "    ${CYAN}$line${ENDC}"
+        done <<< "$found"
+        return 0
+    else
+        echo -e "  ${RED}✗ No MTK device found on USB${ENDC}"
+        return 1
+    fi
+}
+
+mtk_check_acm() {
+    local acm
+    acm=$(ls /dev/ttyACM* 2>/dev/null | head -1)
+    if [[ -n "$acm" ]]; then
+        echo -e "  ${GREEN}✓ COM port: $acm${ENDC}"
+    else
+        echo -e "  ${YELLOW}  No ttyACM device (normal before connecting)${ENDC}"
+    fi
+}
+
+mtk_fix_permissions() {
+    for acm in /dev/ttyACM*; do
+        [[ -e "$acm" ]] && sudo chmod 666 "$acm" && \
+            echo -e "  ${GREEN}✓ chmod 666 $acm${ENDC}"
+    done
+    local lsusb_line
+    lsusb_line=$(lsusb 2>/dev/null | grep "0e8d:" | head -1)
+    if [[ -n "$lsusb_line" ]]; then
+        local bus dev
+        bus=$(echo "$lsusb_line" | grep -oP 'Bus \K[0-9]+')
+        dev=$(echo "$lsusb_line" | grep -oP 'Device \K[0-9]+')
+        if [[ -n "$bus" && -n "$dev" ]]; then
+            local usb_path
+            usb_path=$(printf "/dev/bus/usb/%03d/%03d" "$bus" "$dev")
+            [[ -e "$usb_path" ]] && sudo chmod 666 "$usb_path" && \
+                echo -e "  ${GREEN}✓ chmod 666 $usb_path${ENDC}"
+        fi
+    fi
+}
+
+mtk_resolve_paths() {
+    # Sets MTK_SCATTER and MTK_AUTH globals
+    echo -e "\n${BOLD}Scatter file (flash.xml):${ENDC}"
+    echo -e "${CYAN}  Drag & drop flash.xml or paste path:${ENDC}"
+    read -rp "  Path: " scatter_raw
+    MTK_SCATTER=$(process_path "$scatter_raw")
+
+    # Accept directory — search inside it
+    if [[ -d "$MTK_SCATTER" ]]; then
+        local found_scatter
+        found_scatter=$(find "$MTK_SCATTER" -name "flash.xml" -not -path "*/\.*" 2>/dev/null | head -1)
+        [[ -n "$found_scatter" ]] && MTK_SCATTER="$found_scatter"
+    fi
+
+    if [[ ! -f "$MTK_SCATTER" ]]; then
+        echo -e "  ${RED}✗ flash.xml not found${ENDC}"
+        MTK_SCATTER=""; return 1
+    fi
+    echo -e "  ${GREEN}✓ Scatter: $MTK_SCATTER${ENDC}"
+
+    # Auto-detect da.auth in same / sibling dir
+    local scatter_dir
+    scatter_dir=$(dirname "$MTK_SCATTER")
+    local auto_auth
+    auto_auth=$(find "$scatter_dir" -name "*.auth" -not -path "*/\.*" 2>/dev/null | head -1)
+    [[ -z "$auto_auth" ]] && \
+        auto_auth=$(find "$scatter_dir" -path "*/download_agent/*.auth" 2>/dev/null | head -1)
+
+    echo -e "\n${BOLD}Auth file (da.auth):${ENDC}"
+    MTK_AUTH=""
+    if [[ -n "$auto_auth" ]]; then
+        echo -e "  ${CYAN}Auto-detected: $auto_auth${ENDC}"
+        read -rp "  Use this? [Y/n]: " use_auto
+        [[ "${use_auto,,}" != "n" ]] && MTK_AUTH="$auto_auth"
+    fi
+
+    if [[ -z "$MTK_AUTH" ]]; then
+        echo -e "  ${CYAN}Drag & drop da.auth or paste path (Enter to skip):${ENDC}"
+        read -rp "  Path: " auth_raw
+        [[ -n "$auth_raw" ]] && MTK_AUTH=$(process_path "$auth_raw")
+    fi
+
+    if [[ -n "$MTK_AUTH" && ! -f "$MTK_AUTH" ]]; then
+        echo -e "  ${YELLOW}⚠ Auth file not found — continuing without it${ENDC}"
+        MTK_AUTH=""
+    elif [[ -n "$MTK_AUTH" ]]; then
+        echo -e "  ${GREEN}✓ Auth: $MTK_AUTH${ENDC}"
+    else
+        echo -e "  ${YELLOW}⚠ No auth file — may fail on locked devices${ENDC}"
+    fi
+}
+
+mtk_run_flash() {
+    # Runs SP Flash Tool CLI; falls back to GUI launch with instructions if CLI unsupported
+    # Expects: MTK_SCATTER, MTK_AUTH, MTK_OP, MTK_SKIP_PART, MTK_PART globals
+    local cmd="sudo $SPFT_BIN --cli"
+    [[ -n "$MTK_SCATTER" ]]   && cmd="$cmd --scatter \"$MTK_SCATTER\""
+    [[ -n "$MTK_AUTH" ]]      && cmd="$cmd --auth \"$MTK_AUTH\""
+    [[ -n "$MTK_OP" ]]        && cmd="$cmd --op $MTK_OP"
+    [[ -n "$MTK_SKIP_PART" ]] && cmd="$cmd --skippartition $MTK_SKIP_PART"
+    [[ -n "$MTK_PART" ]]      && cmd="$cmd --partition $MTK_PART"
+
+    echo -e "\n  ${BOLD}Command:${ENDC} $cmd"
+    echo -e "\n${CYAN}Plug in device (fully OFF) AFTER the tool starts waiting...${ENDC}"
+    echo -e "${YELLOW}If not detected within 10s → hold Vol- while plugging in${ENDC}\n"
+
+    eval "$cmd" 2>&1
+    local rc=$?
+
+    # Detect GUI-only builds
+    if eval "$cmd" 2>&1 | grep -qi "unknown option\|unrecognized\|invalid option"; then
+        echo -e "\n${YELLOW}CLI not supported by this build — launching GUI.${ENDC}"
+        echo -e "${CYAN}In the GUI: scatter + auth are already loaded. Click Download then plug in cable.${ENDC}"
+        sudo "$SPFT_BIN" &
+        return 0
+    fi
+
+    return $rc
+}
+
+mtk_flash_full() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}📲 MTK FULL ROM FLASH${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${RED}${BOLD}⚠  Flashing will ERASE ALL DATA on the device.${ENDC}"
+    echo -e "${CYAN}  Device must be FULLY POWERED OFF before connecting.${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}\n"
+
+    pre_flash_backup_check || return
+    mtk_resolve_paths || { read -rp "  Press ENTER..." _; return; }
+
+    echo -e "\n${BOLD}Flash operation:${ENDC}"
+    echo "  1. Download only        (keeps userdata if unchecked in tool)"
+    echo "  2. Format + Download    (full wipe + flash)"
+    read -rp "  Choice [1-2, default=1]: " op_choice
+    [[ "${op_choice}" == "2" ]] && MTK_OP="format-download" || MTK_OP="download"
+
+    read -rp "  Skip userdata? (preserves user data) [Y/n]: " skip_ud
+    MTK_SKIP_PART=""
+    [[ "${skip_ud,,}" != "n" ]] && MTK_SKIP_PART="userdata"
+    MTK_PART=""
+
+    echo -e "\n${BOLD}${YELLOW}Summary:${ENDC}"
+    echo -e "  Scatter  : ${CYAN}$(basename "$MTK_SCATTER")${ENDC}"
+    [[ -n "$MTK_AUTH" ]] && echo -e "  Auth     : ${CYAN}$(basename "$MTK_AUTH")${ENDC}"
+    echo -e "  Operation: ${CYAN}$MTK_OP${ENDC}"
+    [[ -n "$MTK_SKIP_PART" ]] && echo -e "  Skip     : ${YELLOW}$MTK_SKIP_PART${ENDC}"
+
+    confirm_action "Proceed with flash?" || return
+
+    # Warn if device is already connected (need to unplug first)
+    echo -e "\n${YELLOW}Checking USB for live MTK device...${ENDC}"
+    if detect_mtk_device 2>/dev/null; then
+        echo -e "\n  ${YELLOW}⚠ Device already connected. Unplug it — plug back in AFTER tool is waiting.${ENDC}"
+        read -rp "  Unplugged? [y/N]: " up
+        [[ "${up,,}" != "y" ]] && return
+    fi
+
+    echo -e "\n${BLUE}Starting SP Flash Tool...${ENDC}\n"
+    if mtk_run_flash; then
+        echo -e "\n${GREEN}${BOLD}✓ Flash completed successfully!${ENDC}"
+    else
+        echo -e "\n${RED}${BOLD}✗ Flash failed${ENDC}"
+        echo -e "${YELLOW}  Troubleshooting:${ENDC}"
+        echo -e "    • Unplug cable → re-run → plug in AFTER tool waits"
+        echo -e "    • Wrong auth file? Try without it"
+        echo -e "    • Run option 5 to fix USB permissions"
+        echo -e "    • Hold Vol- only (no power) when plugging in"
+    fi
+    read -rp "  Press ENTER..." _
+}
+
+mtk_flash_partition() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}🧩 MTK SINGLE PARTITION FLASH${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+
+    mtk_resolve_paths || { read -rp "  Press ENTER..." _; return; }
+
+    echo -e "\n${CYAN}Valid names are in your scatter/flash.xml (e.g. boot, recovery, system, vendor, lk)${ENDC}"
+    read -rp "  Partition name: " MTK_PART
+    [[ -z "$MTK_PART" ]] && { echo -e "${RED}No partition${ENDC}"; read -rp " ENTER..." _; return; }
+
+    MTK_OP="download"
+    MTK_SKIP_PART=""
+
+    confirm_action "Flash $MTK_PART?" || return
+
+    echo -e "\n${BLUE}Starting SP Flash Tool...${ENDC}\n"
+    if mtk_run_flash; then
+        echo -e "\n${GREEN}✓ Partition flash complete${ENDC}"
+    else
+        echo -e "\n${RED}✗ Failed${ENDC}"
+    fi
+    read -rp "  Press ENTER..." _
+}
+
+mtk_read_back() {
+    clear_screen
+    echo -e "${BOLD}${MAGENTA}📥 MTK READ-BACK (DUMP)${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+
+    mtk_resolve_paths || { read -rp "  Press ENTER..." _; return; }
+
+    MTK_OP="readback"
+    MTK_SKIP_PART=""
+    MTK_PART=""
+
+    confirm_action "Start read-back?" || return
+    echo -e "\n${BLUE}Starting SP Flash Tool...${ENDC}\n"
+    mtk_run_flash && echo -e "\n${GREEN}✓ Read-back complete${ENDC}" || \
+                     echo -e "\n${RED}✗ Failed${ENDC}"
+    read -rp "  Press ENTER..." _
+}
+
+mtk_format_all() {
+    clear_screen
+    echo -e "${BOLD}${RED}⚠  MTK FORMAT ALL (WIPE ONLY — NO FLASH)${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+
+    mtk_resolve_paths || { read -rp "  Press ENTER..." _; return; }
+
+    MTK_OP="format"
+    MTK_SKIP_PART=""
+    MTK_PART=""
+
+    confirm_action "Format device (WIPE ALL)?" || return
+    echo -e "\n${BLUE}Starting SP Flash Tool...${ENDC}\n"
+    mtk_run_flash && echo -e "\n${GREEN}✓ Format complete${ENDC}" || \
+                     echo -e "\n${RED}✗ Failed${ENDC}"
+    read -rp "  Press ENTER..." _
+}
+
+mtk_detect_menu() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}🔌 MTK DEVICE DETECTION${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}\n"
+
+    detect_mtk_device
+    echo ""
+    mtk_check_acm
+    echo ""
+    echo -e "${BOLD}Fixing USB permissions for this session...${ENDC}"
+    mtk_fix_permissions
+
+    echo -e "\n${BOLD}How to enter BROM mode:${ENDC}"
+    echo -e "  • Power device ${WHITE}FULLY OFF${ENDC} (no fastboot, no recovery)"
+    echo -e "  • Do NOT hold any buttons"
+    echo -e "  • Plug USB-C cable"
+    echo -e "  • If undetected → hold ${WHITE}Vol-${ENDC} only while plugging in"
+    echo -e "  • USB-C to USB-C preferred over A-to-C adapters"
+
+    read -rp "  Press ENTER..." _
+}
+
+mtk_install_spft() {
+    clear_screen
+    echo -e "${BOLD}${CYAN}SP FLASH TOOL SETUP${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${WHITE}SP Flash Tool comes from MediaTek/device vendors.${ENDC}"
+    echo -e "${CYAN}On Arch: check AUR for 'spflashtool' or install manually.${ENDC}\n"
+
+    echo "  1. Try AUR (yay/paru)"
+    echo "  2. Set manual binary path"
+    echo "  3. Setup udev rules only"
+    echo "  4. Back"
+    read -rp "  Choice: " inst_choice
+
+    case $inst_choice in
+        1)
+            for aur in yay paru; do
+                if command -v "$aur" &>/dev/null; then
+                    echo -e "${BLUE}Trying $aur -S spflashtool...${ENDC}"
+                    "$aur" -S --noconfirm spflashtool 2>/dev/null && {
+                        check_mtk_tools
+                        echo -e "${GREEN}✓ Installed: $SPFT_BIN${ENDC}"
+                        break
+                    }
+                fi
+            done
+            $SPFT_INSTALLED || echo -e "${YELLOW}Not found on AUR. Download from your device vendor.${ENDC}"
+            ;;
+        2)
+            read -rp "  Full path to flash_tool binary: " manual_path
+            manual_path=$(process_path "$manual_path")
+            if [[ -x "$manual_path" ]]; then
+                SPFT_BIN="$manual_path"
+                SPFT_INSTALLED=true
+                echo -e "${GREEN}✓ Using: $SPFT_BIN${ENDC}"
+            else
+                echo -e "${RED}File not found or not executable${ENDC}"
+            fi
+            ;;
+        3) setup_mtk_udev_rules ;;
+    esac
+    read -rp "  Press ENTER..." _
+}
+
+mtk_operations_menu() {
+    while true; do
+        clear_screen
+        echo -e "${BOLD}${MAGENTA}🔧 MTK / SP FLASH TOOL${ENDC}"
+        echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+
+        check_mtk_tools
+
+        echo -e "  SP Flash Tool: $([[ $SPFT_INSTALLED == true ]] && \
+            echo "${GREEN}✓ $(basename "$SPFT_BIN")${ENDC}" || \
+            echo "${RED}✗ Not found${ENDC}")"
+        echo ""
+
+        if [[ $SPFT_INSTALLED == false ]]; then
+            echo "  1. Setup / Install SP Flash Tool"
+            echo "  2. Setup MTK udev rules"
+            echo "  3. Detect MTK device"
+            echo "  4. Back"
+            echo ""
+            read -rp "  Select: " opt
+            case $opt in
+                1) mtk_install_spft ;;
+                2) setup_mtk_udev_rules; read -rp "  Press ENTER..." _ ;;
+                3) mtk_detect_menu ;;
+                4) return ;;
+            esac
+        else
+            echo "  1. 📲 Full ROM Flash (Download / Format+Download)"
+            echo "  2. 🧩 Single Partition Flash"
+            echo "  3. 📥 Read-Back (dump partition to file)"
+            echo "  4. 🧹 Format All (wipe only, no flash)"
+            echo "  5. 🔌 Detect device / fix USB permissions"
+            echo "  6. 🛡  Setup MTK udev rules"
+            echo "  7. 🖥  Launch SP Flash Tool GUI"
+            echo "  8. Back"
+            echo ""
+            read -rp "  Select: " opt
+            case $opt in
+                1) mtk_flash_full ;;
+                2) mtk_flash_partition ;;
+                3) mtk_read_back ;;
+                4) mtk_format_all ;;
+                5) mtk_detect_menu ;;
+                6) setup_mtk_udev_rules; read -rp "  Press ENTER..." _ ;;
+                7)
+                    echo -e "${BLUE}Launching GUI (sudo)...${ENDC}"
+                    sudo "$SPFT_BIN" &
+                    echo -e "${GREEN}✓ SP Flash Tool GUI launched. Load scatter + auth, then click Download.${ENDC}"
+                    read -rp "  Press ENTER..." _
+                    ;;
+                8) return ;;
+                *) echo -e "${RED}Invalid option${ENDC}"; sleep 1 ;;
+            esac
+        fi
+    done
+}
+
 main_menu() {
     while true; do
         clear_screen
@@ -6444,6 +6849,7 @@ main_menu() {
         echo "  8. 💾 Full Device Backup (SMS, Contacts, Media, APKs)"
         echo "  9. Install System-Wide"
         echo " 10. 🔬 Security Toolkit"
+        echo " 11. 🔧 MTK / SP Flash Tool"
         echo "  q. Exit"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
         
@@ -6460,6 +6866,7 @@ main_menu() {
             8) [[ -n "$SERIAL" ]] && full_backup_menu || { echo -e "${RED}No device connected${ENDC}"; sleep 2; } ;;
             9) install_systemwide ;;
             10) security_testing_menu ;;
+            11) mtk_operations_menu ;;
             q|Q) exit 0 ;;
             *)
                 echo -e "${RED}Invalid option${ENDC}"
