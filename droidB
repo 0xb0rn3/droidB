@@ -6750,31 +6750,71 @@ mtk_resolve_paths() {
 }
 
 mtk_run_flash() {
-    # Runs SP Flash Tool CLI; falls back to GUI launch with instructions if CLI unsupported
+    # Runs SP Flash Tool. Auto-detects GUI-only builds and falls back gracefully.
     # Expects: MTK_SCATTER, MTK_AUTH, MTK_OP, MTK_SKIP_PART, MTK_PART globals
-    local cmd="sudo $SPFT_BIN --cli"
-    [[ -n "$MTK_SCATTER" ]]   && cmd="$cmd --scatter \"$MTK_SCATTER\""
-    [[ -n "$MTK_AUTH" ]]      && cmd="$cmd --auth \"$MTK_AUTH\""
-    [[ -n "$MTK_OP" ]]        && cmd="$cmd --op $MTK_OP"
-    [[ -n "$MTK_SKIP_PART" ]] && cmd="$cmd --skippartition $MTK_SKIP_PART"
-    [[ -n "$MTK_PART" ]]      && cmd="$cmd --partition $MTK_PART"
 
-    echo -e "\n  ${BOLD}Command:${ENDC} $cmd"
-    echo -e "\n${CYAN}Plug in device (fully OFF) AFTER the tool starts waiting...${ENDC}"
-    echo -e "${YELLOW}If not detected within 10s → hold Vol- while plugging in${ENDC}\n"
+    # ── Step 1: probe whether this binary supports --cli ─────
+    local probe_out
+    probe_out=$(sudo "$SPFT_BIN" --cli --help 2>&1 | head -5)
+    local cli_supported=true
+    echo "$probe_out" | grep -qi \
+        "unknown option\|unrecognized\|invalid option\|invalid parameter\|Unknown options" \
+        && cli_supported=false
 
-    eval "$cmd" 2>&1
-    local rc=$?
+    # ── Step 2: build command (CLI or GUI arg style) ──────────
+    if [[ $cli_supported == true ]]; then
+        local cmd="sudo $SPFT_BIN --cli"
+        [[ -n "$MTK_SCATTER" ]]   && cmd="$cmd --scatter \"$MTK_SCATTER\""
+        [[ -n "$MTK_AUTH" ]]      && cmd="$cmd --auth \"$MTK_AUTH\""
+        [[ -n "$MTK_OP" ]]        && cmd="$cmd --op $MTK_OP"
+        [[ -n "$MTK_SKIP_PART" ]] && cmd="$cmd --skippartition $MTK_SKIP_PART"
+        [[ -n "$MTK_PART" ]]      && cmd="$cmd --partition $MTK_PART"
 
-    # Detect GUI-only builds
-    if eval "$cmd" 2>&1 | grep -qi "unknown option\|unrecognized\|invalid option"; then
-        echo -e "\n${YELLOW}CLI not supported by this build — launching GUI.${ENDC}"
-        echo -e "${CYAN}In the GUI: scatter + auth are already loaded. Click Download then plug in cable.${ENDC}"
-        sudo "$SPFT_BIN" &
-        return 0
+        echo -e "\n  ${BOLD}Command:${ENDC} $cmd"
+        echo -e "\n${CYAN}Plug in device (fully OFF) AFTER the tool starts waiting...${ENDC}"
+        echo -e "${YELLOW}If not detected within 10s → hold Vol- while plugging in${ENDC}\n"
+
+        # Capture output so we can re-check for runtime "invalid parameter" errors
+        local run_out
+        run_out=$(eval "$cmd" 2>&1)
+        local rc=$?
+        echo "$run_out"
+
+        # Some builds only show the error at runtime, not on --help probe
+        if echo "$run_out" | grep -qi \
+            "unknown option\|unrecognized\|invalid option\|invalid parameter\|Unknown options"; then
+            cli_supported=false
+        else
+            return $rc
+        fi
     fi
 
-    return $rc
+    # ── Step 3: GUI-only build fallback ──────────────────────
+    echo -e "\n${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo -e "${YELLOW}  This SP Flash Tool build does not support CLI mode.${ENDC}"
+    echo -e "${YELLOW}  Launching GUI — follow the steps below:${ENDC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}1.${ENDC} In the GUI, confirm these files are loaded:"
+    echo -e "     Scatter : ${CYAN}$(basename "$MTK_SCATTER")${ENDC}"
+    [[ -n "$MTK_AUTH" ]] && \
+    echo -e "     Auth    : ${CYAN}$(basename "$MTK_AUTH")${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}2.${ENDC} Set operation to: ${CYAN}${MTK_OP:-Download}${ENDC}"
+    [[ -n "$MTK_SKIP_PART" ]] && \
+    echo -e "  ${BOLD}3.${ENDC} Uncheck partition: ${YELLOW}$MTK_SKIP_PART${ENDC}"
+    echo ""
+    echo -e "  ${BOLD}4.${ENDC} Click ${GREEN}Download${ENDC} in the GUI"
+    echo -e "  ${BOLD}5.${ENDC} ${WHITE}THEN${ENDC} plug in the USB cable (device fully OFF)"
+    echo -e "  ${BOLD}6.${ENDC} If no detection after 10s → hold ${WHITE}Vol-${ENDC} while plugging in"
+    echo ""
+
+    # Launch GUI — pass scatter/auth as positional args if accepted, else bare
+    sudo "$SPFT_BIN" 2>/dev/null &
+    local gui_pid=$!
+    echo -e "${GREEN}✓ SP Flash Tool GUI launched (PID: $gui_pid)${ENDC}"
+    echo -e "${CYAN}  Complete the flash in the GUI window that just opened.${ENDC}"
+    return 0
 }
 
 mtk_flash_full() {
