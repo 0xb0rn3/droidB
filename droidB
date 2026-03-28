@@ -3223,7 +3223,8 @@ fastboot_operations_menu() {
         echo "6. Erase partition"
         echo "7. Format partition"
         echo "8. Reboot"
-        echo "9. Back"
+        echo "9. Power off device"
+        echo "10. Back"
         echo ""
         
         read -p "Select: " opt
@@ -3307,7 +3308,20 @@ fastboot_operations_menu() {
                 echo -e "${GREEN}✓ Reboot command sent${ENDC}"
                 read -p "Press Enter..."
                 ;;
-            9) return ;;
+            9)
+                confirm_action "Power off device?" && {
+                    echo -e "${BLUE}Powering off...${ENDC}"
+                    $FASTBOOT oem poweroff 2>/dev/null && \
+                        echo -e "${GREEN}✓ Power off command sent${ENDC}" || \
+                    $FASTBOOT reboot-off 2>/dev/null && \
+                        echo -e "${GREEN}✓ Power off command sent${ENDC}" || \
+                    $FASTBOOT oem shutdown 2>/dev/null && \
+                        echo -e "${GREEN}✓ Power off command sent${ENDC}" || \
+                        echo -e "${YELLOW}⚠ Power off not supported by this bootloader${ENDC}"
+                }
+                read -p "Press Enter..."
+                ;;
+            10) return ;;
             *)
                 echo -e "${RED}Invalid option${ENDC}"
                 sleep 1
