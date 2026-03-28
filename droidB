@@ -3332,6 +3332,82 @@ install_systemwide() {
     exit 0
 }
 
+_detect_distro() {
+    DISTRO_ID=""
+    DISTRO_FAMILY=""
+    PKG_MANAGER=""
+
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        source /etc/os-release
+        DISTRO_ID="${ID,,}"
+    elif [[ -f /etc/arch-release ]];   then DISTRO_ID="arch"
+    elif [[ -f /etc/debian_version ]]; then DISTRO_ID="debian"
+    elif [[ -f /etc/redhat-release ]]; then DISTRO_ID="fedora"
+    fi
+
+    case "$DISTRO_ID" in
+        arch|archcraft|archbang|endeavouros|manjaro|garuda|artix|arcolinux|cachyos)
+            DISTRO_FAMILY="arch";    PKG_MANAGER="pacman" ;;
+        debian|ubuntu|linuxmint|pop|elementary|kali|parrot|zorin|mx|raspbian)
+            DISTRO_FAMILY="debian";  PKG_MANAGER="apt" ;;
+        fedora|rhel|centos|rocky|almalinux|nobara)
+            DISTRO_FAMILY="fedora"
+            command -v dnf &>/dev/null && PKG_MANAGER="dnf" || PKG_MANAGER="yum" ;;
+        opensuse*|sles)
+            DISTRO_FAMILY="suse";    PKG_MANAGER="zypper" ;;
+        alpine)
+            DISTRO_FAMILY="alpine";  PKG_MANAGER="apk" ;;
+        gentoo)
+            DISTRO_FAMILY="gentoo";  PKG_MANAGER="emerge" ;;
+        void)
+            DISTRO_FAMILY="void";    PKG_MANAGER="xbps-install" ;;
+        nixos)
+            DISTRO_FAMILY="nix";     PKG_MANAGER="nix-env" ;;
+        slackware)
+            DISTRO_FAMILY="slackware"; PKG_MANAGER="pkgtool" ;;
+        *)
+            DISTRO_FAMILY="unknown"; PKG_MANAGER="" ;;
+    esac
+}
+
+_adb_setup_udev_android() {
+    local RULES_FILE="/etc/udev/rules.d/51-android.rules"
+    sudo tee "$RULES_FILE" > /dev/null << 'UDEV'
+# Android udev rules — droidB
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0bb4", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="22b8", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1004", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0fce", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2717", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="22d9", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="12d1", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2a70", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="17ef", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0b05", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0502", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0955", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="19d2", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2d95", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2fb4", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0666", GROUP="plugdev"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0e8d", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", MODE="0666", GROUP="plugdev"
+UDEV
+    sudo udevadm control --reload-rules && sudo udevadm trigger 2>/dev/null
+    if ! getent group plugdev &>/dev/null; then
+        sudo groupadd plugdev 2>/dev/null
+    fi
+    case "$DISTRO_FAMILY" in
+        arch)   sudo usermod -aG plugdev,uucp "$USER" 2>/dev/null ;;
+        debian) sudo usermod -aG plugdev,dialout "$USER" 2>/dev/null ;;
+        *)      sudo usermod -aG plugdev "$USER" 2>/dev/null ;;
+    esac
+    echo -e "  ${GREEN}✓ Android udev rules written to $RULES_FILE${ENDC}"
+}
+
 check_requirements() {
     create_embedded_debloat_list
     _detect_distro
