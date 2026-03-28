@@ -501,7 +501,7 @@ EOF
     echo -e "${ENDC}"
     echo -e "${BOLD}${BLUE}    Advanced Android Device Manager v${VERSION}${ENDC}"
     echo -e "${GREEN}    Universal Debloater | Samsung Tools | Security-Focused${ENDC}"
-    echo -e "${MAGENTA}    Developer: ${BOLD}0xbv1 | 0xb0rn3${ENDC}"
+    echo -e "${MAGENTA}    Developer: ${BOLD}0xbv1 | www.oxborn3.com | 0xb0rn3${ENDC}"
     echo -e "${YELLOW}════════════════════════════════════════════════════════════${ENDC}"
 }
 
@@ -3334,24 +3334,124 @@ install_systemwide() {
 
 check_requirements() {
     create_embedded_debloat_list
-    
-    if ! command -v adb &>/dev/null; then
-        echo -e "${RED}ERROR: ADB not found${ENDC}"
-        echo "Install android-tools package for your system"
-        exit 1
-    fi
-    ADB=$(command -v adb)
-    
-    if ! command -v fastboot &>/dev/null; then
-        echo -e "${YELLOW}Warning: Fastboot not found${ENDC}"
-    fi
-    FASTBOOT=$(command -v fastboot)
-    
-    check_samsung_tools
-    
-    $ADB start-server &>/dev/null
-}
+    _detect_distro
 
+    # ── ADB check ────────────────────────────────────────────
+    if ! command -v adb &>/dev/null; then
+        echo -e "${BOLD}${YELLOW}⚠  ADB not found on this system.${ENDC}"
+        echo -e "${CYAN}droidB needs ADB to function. Installing now...${ENDC}\n"
+
+        local installed=false
+
+        case "$DISTRO_FAMILY" in
+            arch)
+                echo -e "${BLUE}→ pacman -S android-tools${ENDC}"
+                sudo pacman -S --noconfirm android-tools 2>&1 && installed=true
+                ;;
+            debian)
+                echo -e "${BLUE}→ apt install android-tools-adb android-tools-fastboot${ENDC}"
+                sudo apt-get update -qq 2>/dev/null
+                sudo apt-get install -y android-tools-adb android-tools-fastboot 2>&1 || \
+                    sudo apt-get install -y adb fastboot 2>&1
+                command -v adb &>/dev/null && installed=true
+                ;;
+            fedora)
+                echo -e "${BLUE}→ $PKG_MANAGER install android-tools${ENDC}"
+                sudo "$PKG_MANAGER" install -y android-tools 2>&1 && installed=true
+                ;;
+            suse)
+                echo -e "${BLUE}→ zypper install android-tools${ENDC}"
+                sudo zypper install -y android-tools 2>&1 && installed=true
+                ;;
+            alpine)
+                echo -e "${BLUE}→ apk add android-tools${ENDC}"
+                sudo apk add --no-cache android-tools 2>&1 && installed=true
+                ;;
+            gentoo)
+                echo -e "${BLUE}→ emerge dev-util/android-tools${ENDC}"
+                sudo emerge --ask=n dev-util/android-tools 2>&1 && installed=true
+                ;;
+            void)
+                echo -e "${BLUE}→ xbps-install android-tools${ENDC}"
+                sudo xbps-install -Sy android-tools 2>&1 && installed=true
+                ;;
+            nix)
+                echo -e "${BLUE}→ nix-env -iA nixpkgs.android-tools${ENDC}"
+                nix-env -iA nixpkgs.android-tools 2>&1 && installed=true
+                ;;
+            *)
+                echo -e "${YELLOW}Unknown distro — falling back to Google Platform-Tools download.${ENDC}\n"
+                # Inline platform-tools install (no root needed)
+                local PT_URL="https://dl.google.com/android/repository/platform-tools-latest-linux.zip"
+                local PT_ZIP="/tmp/platform-tools-latest-linux.zip"
+                local PT_DIR="$HOME/.local/platform-tools"
+                local BIN_DIR="$HOME/.local/bin"
+
+                if command -v curl &>/dev/null; then
+                    curl -L --progress-bar -o "$PT_ZIP" "$PT_URL"
+                elif command -v wget &>/dev/null; then
+                    wget -q --show-progress -O "$PT_ZIP" "$PT_URL"
+                else
+                    echo -e "${RED}✗ curl/wget not found. Install ADB manually.${ENDC}"
+                    exit 1
+                fi
+
+                if [[ -f "$PT_ZIP" && -s "$PT_ZIP" ]]; then
+                    rm -rf "$HOME/.local/platform-tools"
+                    unzip -q "$PT_ZIP" -d "$HOME/.local/" 2>/dev/null
+                    mkdir -p "$BIN_DIR"
+                    for bin in "$HOME/.local/platform-tools"/*; do
+                        [[ -f "$bin" && -x "$bin" ]] && \
+                            ln -sf "$bin" "$BIN_DIR/$(basename "$bin")"
+                    done
+                    rm -f "$PT_ZIP"
+                    export PATH="$BIN_DIR:$PATH"
+                    # Persist PATH
+                    local shell_rc
+                    case "$SHELL" in
+                        */zsh)  shell_rc="$HOME/.zshrc" ;;
+                        */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+                        *)      shell_rc="$HOME/.bashrc" ;;
+                    esac
+                    grep -qF '.local/bin' "$shell_rc" 2>/dev/null || \
+                        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
+                    command -v adb &>/dev/null && installed=true
+                fi
+                ;;
+        esac
+
+        # Final ADB check after install attempt
+        if command -v adb &>/dev/null; then
+            echo -e "\n${GREEN}${BOLD}✓ ADB installed: $(adb version 2>/dev/null | head -1)${ENDC}"
+            # Write udev rules silently so device is usable immediately
+            _adb_setup_udev_android 2>/dev/null
+        else
+            echo -e "\n${RED}${BOLD}✗ Auto-install failed.${ENDC}"
+            echo -e "${YELLOW}  Try manually:${ENDC}"
+            echo -e "    Arch:   ${CYAN}sudo pacman -S android-tools${ENDC}"
+            echo -e "    Debian: ${CYAN}sudo apt install adb${ENDC}"
+            echo -e "    Fedora: ${CYAN}sudo dnf install android-tools${ENDC}"
+            echo -e "    Any:    ${CYAN}droidB → option 12 (Install ADB)${ENDC}"
+            echo ""
+            read -rp "  Press ENTER to continue anyway (some features will be unavailable)..." _
+        fi
+    fi
+
+    ADB=$(command -v adb || true)
+
+    # ── Fastboot check (non-fatal) ────────────────────────────
+    if ! command -v fastboot &>/dev/null; then
+        echo -e "${YELLOW}⚠  Fastboot not found — fastboot operations will be unavailable.${ENDC}"
+    fi
+    FASTBOOT=$(command -v fastboot || true)
+
+    # ── Samsung tools ─────────────────────────────────────────
+    check_samsung_tools
+    check_mtk_tools
+
+    # ── Start ADB server if ADB is available ─────────────────
+    [[ -n "$ADB" ]] && $ADB start-server &>/dev/null
+}
 # ============================================================
 #  FULL DEVICE BACKUP  (v0.3.1 — pre-flash data protection)
 # ============================================================
